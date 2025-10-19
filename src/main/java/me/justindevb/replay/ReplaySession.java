@@ -5,10 +5,19 @@ import com.github.retrooper.packetevents.event.PacketListener;
 import com.github.retrooper.packetevents.event.PacketListenerPriority;
 import com.github.retrooper.packetevents.event.PacketReceiveEvent;
 import com.github.retrooper.packetevents.event.simple.PacketPlayReceiveEvent;
+import com.github.retrooper.packetevents.protocol.entity.data.EntityData;
+import com.github.retrooper.packetevents.protocol.entity.data.EntityDataTypes;
+import com.github.retrooper.packetevents.protocol.entity.type.EntityType;
+import com.github.retrooper.packetevents.protocol.entity.type.EntityTypes;
 import com.github.retrooper.packetevents.protocol.packettype.PacketType;
 import com.github.retrooper.packetevents.wrapper.play.client.WrapperPlayClientInteractEntity;
+import com.github.retrooper.packetevents.wrapper.play.server.WrapperPlayServerDestroyEntities;
+import com.github.retrooper.packetevents.wrapper.play.server.WrapperPlayServerEntityMetadata;
+import com.github.retrooper.packetevents.wrapper.play.server.WrapperPlayServerSpawnEntity;
 import com.google.gson.Gson;
 import com.google.gson.reflect.TypeToken;
+import io.github.retrooper.packetevents.util.SpigotConversionUtil;
+import io.github.retrooper.packetevents.util.SpigotReflectionUtil;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.Material;
@@ -21,7 +30,6 @@ import org.bukkit.event.inventory.InventoryDragEvent;
 import org.bukkit.event.player.PlayerDropItemEvent;
 import org.bukkit.event.player.PlayerInteractAtEntityEvent;
 import org.bukkit.event.player.PlayerInteractEvent;
-import org.bukkit.event.player.PlayerItemHeldEvent;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.meta.ItemMeta;
 import org.bukkit.scheduler.BukkitRunnable;
@@ -38,6 +46,7 @@ public class ReplaySession implements Listener, PacketListener {
     private final Gson gson = new Gson();
 
     private List<Map<String, Object>> timeline;
+    private List<Integer> trackedEntityIds = new ArrayList<>();
     Map<UUID, RecordedEntity> recordedEntities = new HashMap<>();
     private int tick = 0;
     private boolean paused = false;
@@ -173,6 +182,14 @@ public class ReplaySession implements Listener, PacketListener {
         viewer.updateInventory();
     }
 
+    private void clearFakeItems() {
+        for (int id : trackedEntityIds) {
+            WrapperPlayServerDestroyEntities destroy = new WrapperPlayServerDestroyEntities(id);
+            PacketEvents.getAPI().getPlayerManager().sendPacket(viewer, destroy);
+        }
+        trackedEntityIds.clear();
+    }
+
     private void handleEvent(RecordedEntity entity, Map<String, Object> event) {
         String type = (String) event.get("type");
         if (type == null) return; // skip malformed event
@@ -219,6 +236,17 @@ public class ReplaySession implements Listener, PacketListener {
                 if (entity instanceof RecordedPlayer rp) {
                     rp.updateInventory(event);
                 }
+            }
+            case "item_drop" -> {
+                Map<String, Object> itemMap = (Map<String, Object>) event.get("item");
+                Map<String, Object> locMap = (Map<String, Object>) event.get("location");
+
+                ItemStack stack = deserializeItem(itemMap);
+                Location loc = deserializeLocation(locMap);
+
+                if (stack != null && loc != null)
+                    spawnFakeDroppedItem(stack, loc);
+
             }
         }
     }
@@ -402,6 +430,12 @@ public class ReplaySession implements Listener, PacketListener {
 
         WrapperPlayClientInteractEntity wrapper = new WrapperPlayClientInteractEntity(event);
 
+        /*
+        Prevent picking up fake items dropped in a replay
+         */
+        if (trackedEntityIds.contains(wrapper.getEntityId()))
+            event.setCancelled(true);
+
         int entityId = wrapper.getEntityId();
         RecordedEntity recordedEntity = recordedEntities.values()
                 .stream()
@@ -426,6 +460,66 @@ public class ReplaySession implements Listener, PacketListener {
 
     private boolean isActive() {
         return ReplayRegistry.contains(this);
+    }
+
+    private ItemStack deserializeItem(Map<String, Object> map) {
+        if (map == null) return null;
+
+        Material type = Material.valueOf((String) map.get("type"));
+        int amount = ((Number) map.get("amount")).intValue();
+        ItemStack item = new ItemStack(type, amount);
+
+        // Optional: simple meta reconstruction
+        if (map.containsKey("displayName") || map.containsKey("lore")) {
+            ItemMeta meta = item.getItemMeta();
+            if (meta != null) {
+                if (map.containsKey("displayName")) meta.setDisplayName((String) map.get("displayName"));
+                if (map.containsKey("lore")) meta.setLore((List<String>) map.get("lore"));
+                item.setItemMeta(meta);
+            }
+        }
+
+        return item;
+    }
+
+    private Location deserializeLocation(Map<String, Object> map) {
+        if (map == null)
+            return null;
+        double x = ((Number) map.get("x")).doubleValue();
+        double y = ((Number) map.get("y")).doubleValue();
+        double z = ((Number) map.get("z")).doubleValue();
+        float yaw = map.get("yaw") instanceof Number n ? n.floatValue() : 0f;
+        float pitch = map.get("pitch") instanceof Number n ? n.floatValue() : 0f;
+        String world = map.get("world").toString();
+
+        return new Location(Bukkit.getWorld(world), x, y, z, yaw, pitch);
+    }
+
+    private void spawnFakeDroppedItem(ItemStack stack, Location loc) {
+        int entityId = SpigotReflectionUtil.generateEntityId();
+        trackedEntityIds.add(entityId);
+
+        com.github.retrooper.packetevents.protocol.item.ItemStack nmsStack = SpigotConversionUtil.fromBukkitItemStack(stack);
+
+        WrapperPlayServerSpawnEntity spawn = new WrapperPlayServerSpawnEntity(
+        entityId,
+        UUID.randomUUID(),
+        EntityTypes.ITEM,
+        SpigotConversionUtil.fromBukkitLocation(loc),
+        loc.getYaw(),
+        0,
+        null
+        );
+
+        WrapperPlayServerEntityMetadata meta = new WrapperPlayServerEntityMetadata(
+                entityId,
+                Collections.singletonList(
+                        new EntityData(8, EntityDataTypes.ITEMSTACK, nmsStack)
+                )
+        );
+
+        PacketEvents.getAPI().getPlayerManager().sendPacket(viewer, spawn);
+        PacketEvents.getAPI().getPlayerManager().sendPacket(viewer, meta);
     }
 
 }

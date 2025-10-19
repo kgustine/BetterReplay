@@ -265,6 +265,19 @@ public class RecordedPlayer extends RecordedEntity {
         return item;
     }
 
+    private Location deserializeLocation(Map<String, Object> map) {
+        if (map == null)
+            return null;
+        double x = ((Number) map.get("x")).doubleValue();
+        double y = ((Number) map.get("y")).doubleValue();
+        double z = ((Number) map.get("z")).doubleValue();
+        float yaw = map.get("yaw") instanceof Number n ? n.floatValue() : 0f;
+        float pitch = map.get("pitch") instanceof Number n ? n.floatValue() : 0f;
+        String world = map.get("world").toString();
+
+        return new Location(Bukkit.getWorld(world), x, y, z, yaw, pitch);
+    }
+
     public void updateInventory(Map<String, Object> snapshot) {
         this.currentInventory = snapshot;
 

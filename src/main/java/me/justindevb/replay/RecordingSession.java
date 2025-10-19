@@ -131,6 +131,25 @@ public class RecordingSession implements Listener, PacketListener {
         timeline.add(event);
     }
 
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void onItemDrop(PlayerDropItemEvent e) {
+        Player p =  e.getPlayer();
+        if (!trackedPlayers.contains(p.getUniqueId()))
+            return;
+
+        ItemStack dropped = e.getItemDrop().getItemStack();
+
+        Map<String, Object> event = new HashMap<>();
+        event.put("tick", tick);
+        event.put("type", "item_drop");
+        event.put("uuid", p.getUniqueId().toString());
+        event.put("item", serializeItem(dropped));
+        event.put("loc", serializeLocation(p.getLocation()));
+        timeline.add(event);
+
+        e.setCancelled(true);
+    }
+
 
     @EventHandler(priority = EventPriority.MONITOR)
     public void onBlockPlace(BlockPlaceEvent e) {
@@ -399,6 +418,18 @@ public class RecordingSession implements Listener, PacketListener {
         map.put("meta", item.hasItemMeta() ? item.getItemMeta().serialize() : null);
         return map;
     }
+
+    private Map<String, Object> serializeLocation(org.bukkit.Location loc) {
+        Map<String, Object> map = new HashMap<>();
+        map.put("x", loc.getX());
+        map.put("y", loc.getY());
+        map.put("z", loc.getZ());
+        map.put("yaw", loc.getYaw());
+        map.put("pitch", loc.getPitch());
+        map.put("world", loc.getWorld().getName());
+        return map;
+    }
+
 
 
 }
