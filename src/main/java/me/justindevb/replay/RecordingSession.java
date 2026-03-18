@@ -23,6 +23,7 @@ import org.bukkit.event.block.BlockPlaceEvent;
 import org.bukkit.event.entity.EntityDamageByEntityEvent;
 import org.bukkit.event.entity.EntityDamageEvent;
 import org.bukkit.event.entity.EntityDeathEvent;
+import org.bukkit.event.entity.PlayerDeathEvent;
 import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.player.*;
 import org.bukkit.inventory.ItemStack;
@@ -92,6 +93,7 @@ public class RecordingSession implements Listener, PacketListener {
             moveEvent.put("name", p.getName());
             moveEvent.put("etype", EntityType.PLAYER);
             moveEvent.put("uuid", uuid.toString());
+            moveEvent.put("world", p.getWorld().getName());
             moveEvent.put("x", loc.getX());
             moveEvent.put("y", loc.getY());
             moveEvent.put("z", loc.getZ());
@@ -113,6 +115,7 @@ public class RecordingSession implements Listener, PacketListener {
             moveEvent.put("type", "entity_move");
             moveEvent.put("uuid", uuid.toString());
             moveEvent.put("etype", e.getType().name());
+            moveEvent.put("world", e.getWorld().getName());
             moveEvent.put("x", e.getLocation().getX());
             moveEvent.put("y", e.getLocation().getY());
             moveEvent.put("z", e.getLocation().getZ());
@@ -132,6 +135,7 @@ public class RecordingSession implements Listener, PacketListener {
         event.put("tick", tick);
         event.put("type", "block_break");
         event.put("uuid", e.getPlayer().getUniqueId().toString());
+        event.put("world", e.getBlock().getWorld().getName());
         event.put("x", e.getBlock().getX());
         event.put("y", e.getBlock().getY());
         event.put("z", e.getBlock().getZ());
@@ -146,6 +150,7 @@ public class RecordingSession implements Listener, PacketListener {
         event.put("tick", tick);
         event.put("type", "block_break_complete");
         event.put("uuid", e.getPlayer().getUniqueId().toString());
+        event.put("world", e.getBlock().getWorld().getName());
         event.put("x", e.getBlock().getX());
         event.put("y", e.getBlock().getY());
         event.put("z", e.getBlock().getZ());
@@ -178,6 +183,7 @@ public class RecordingSession implements Listener, PacketListener {
         event.put("tick", tick);
         event.put("type", "block_place");
         event.put("uuid", e.getPlayer().getUniqueId().toString());
+        event.put("world", e.getBlock().getWorld().getName());
         event.put("x", e.getBlock().getX());
         event.put("y", e.getBlock().getY());
         event.put("z", e.getBlock().getZ());
@@ -211,6 +217,7 @@ public class RecordingSession implements Listener, PacketListener {
             spawnEvent.put("type", "entity_spawn");
             spawnEvent.put("uuid", entity.getUniqueId().toString());
             spawnEvent.put("etype", entity.getType().name());
+            spawnEvent.put("world", entity.getWorld().getName());
             spawnEvent.put("x", entity.getLocation().getX());
             spawnEvent.put("y", entity.getLocation().getY());
             spawnEvent.put("z", entity.getLocation().getZ());
@@ -279,6 +286,7 @@ public class RecordingSession implements Listener, PacketListener {
         spawnEvent.put("type", "entity_spawn");
         spawnEvent.put("uuid", uuid.toString());
         spawnEvent.put("etype", e.getEntityType().name());
+        spawnEvent.put("world", e.getLocation().getWorld().getName());
         spawnEvent.put("x", e.getEntity().getLocation().getX());
         spawnEvent.put("y", e.getEntity().getLocation().getY());
         spawnEvent.put("z", e.getEntity().getLocation().getZ());
@@ -297,6 +305,7 @@ public class RecordingSession implements Listener, PacketListener {
         event.put("type", "entity_death");
         event.put("uuid", uuid.toString());
         event.put("etype", e.getEntityType().name());
+        event.put("world", entity.getLocation().getWorld().getName());
         event.put("x", entity.getLocation().getX());
         event.put("y", entity.getLocation().getY());
         event.put("z", entity.getLocation().getZ());
@@ -305,6 +314,27 @@ public class RecordingSession implements Listener, PacketListener {
 
         if (!(e instanceof Player))
             trackedEntities.remove(uuid);
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void onPlayerDeath(PlayerDeathEvent e) {
+        UUID uuid = e.getPlayer().getUniqueId();
+
+        Player p = e.getPlayer();
+
+        if (!trackedPlayers.contains(uuid)) return;
+
+        Map<String, Object> event = new HashMap<>();
+        event.put("tick", tick);
+        event.put("type", "entity_death");
+        event.put("uuid", uuid.toString());
+        event.put("etype", e.getEntityType().name());
+        event.put("world", p.getWorld().getName());
+        event.put("x", p.getLocation().getX());
+        event.put("y", p.getLocation().getY());
+        event.put("z", p.getLocation().getZ());
+
+        timeline.add(event);
     }
 
     @EventHandler(priority = EventPriority.MONITOR)

@@ -5,6 +5,7 @@ import com.github.retrooper.packetevents.wrapper.play.server.WrapperPlayServerDe
 import com.github.retrooper.packetevents.wrapper.play.server.WrapperPlayServerEntityStatus;
 import com.github.retrooper.packetevents.wrapper.play.server.WrapperPlayServerPlayerInfoRemove;
 import io.github.retrooper.packetevents.util.SpigotReflectionUtil;
+import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.entity.EntityType;
 import org.bukkit.entity.Player;
@@ -65,7 +66,12 @@ public abstract class RecordedEntity {
     public void showDeath(Map<String, Object> event) {
         if (fakeEntityId == 0) return;
 
+        if (this instanceof RecordedPlayer rp) {
+            viewer.sendMessage("[BetterReplay] " + rp.getName() + " died");
+        }
+
         WrapperPlayServerEntityStatus packet = new WrapperPlayServerEntityStatus(fakeEntityId, (byte) 3);
+        packet.setStatus(3);
         PacketEvents.getAPI().getPlayerManager().sendPacket(viewer, packet);
     }
 

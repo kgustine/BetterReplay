@@ -19,10 +19,7 @@ import me.justindevb.replay.api.events.ReplayStartEvent;
 import me.justindevb.replay.api.events.ReplayStopEvent;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
-import org.bukkit.Bukkit;
-import org.bukkit.Location;
-import org.bukkit.Material;
-import org.bukkit.OfflinePlayer;
+import org.bukkit.*;
 import org.bukkit.entity.Player;
 import org.bukkit.entity.Pose;
 import org.bukkit.event.EventHandler;
@@ -50,12 +47,12 @@ import static me.justindevb.replay.util.ItemStackSerializer.deserializeItem;
 public class ReplaySession implements Listener, PacketListener {
     private final Player viewer;
     private final Replay replay;
-    private final Gson gson = new Gson();
 
     private WrappedTask replayTask = null;
 
     private List<Map<String, Object>> timeline;
     private final Set<Integer> trackedEntityIds = new HashSet<>();
+    private final Set<UUID> deadEntities = new HashSet<>();
     private final Map<UUID, RecordedEntity> recordedEntities = new HashMap<>();
     private int tick = 0;
     private boolean paused = false;
@@ -80,11 +77,13 @@ public class ReplaySession implements Listener, PacketListener {
         copyInventory();
 
         Map<String, Object> firstLocationEvent = timeline.stream()
-                .filter(e -> e.containsKey("x") && e.containsKey("y") && e.containsKey("z"))
+                .filter(e -> e.containsKey("world") && e.containsKey("x") && e.containsKey("y") && e.containsKey("z"))
                 .findFirst()
                 .orElse(null);
 
         if (firstLocationEvent != null) {
+            String sWorld = asString(firstLocationEvent.get("world"));
+            World world = Bukkit.getWorld(sWorld);
             Double x = asDouble(firstLocationEvent.get("x"));
             Double y = asDouble(firstLocationEvent.get("y"));
             Double z = asDouble(firstLocationEvent.get("z"));
@@ -92,7 +91,7 @@ public class ReplaySession implements Listener, PacketListener {
             Float pitch = asFloat(firstLocationEvent.get("pitch"));
 
             if (x != null && y != null && z != null) {
-                replay.getFoliaLib().getScheduler().teleportAsync(viewer, new Location(viewer.getWorld(), x, y, z, yaw, pitch));
+                replay.getFoliaLib().getScheduler().teleportAsync(viewer, new Location(world, x, y, z, yaw, pitch));
             }
         }
 
@@ -161,11 +160,19 @@ public class ReplaySession implements Listener, PacketListener {
                 }
 
                 if ("player_quit".equals(type)) {
+                    if (recordedEntities.get(uuid) instanceof RecordedPlayer rp) {
+                        viewer.sendMessage("[BetterReplay] " + rp.getName() + " disconnected");
+                    }
                     RecordedEntity entity = recordedEntities.remove(uuid);
                     if (entity != null) {
                         entity.destroy();
                         trackedEntityIds.remove(entity.getFakeEntityId());
                     }
+                    tick++;
+                    continue;
+                }
+
+                if (deadEntities.contains(uuid) && ("player_move".equals(type) || "entity_move".equals(type))) {
                     tick++;
                     continue;
                 }
@@ -183,13 +190,20 @@ public class ReplaySession implements Listener, PacketListener {
                     Double y = asDouble(event.get("y"));
                     Double z = asDouble(event.get("z"));
 
-                    if (x == null || y == null || z == null) {
+                    String worldName = asString(event.get("world"));
+                    if (x == null || y == null || z == null || worldName == null) {
+                        tick++;
+                        continue;
+                    }
+
+                    World world = Bukkit.getWorld(worldName);
+                    if (world == null) {
                         tick++;
                         continue;
                     }
 
                     Location initialLoc = new Location(
-                            viewer.getWorld(),
+                            world,
                             x,
                             y,
                             z,
@@ -213,11 +227,6 @@ public class ReplaySession implements Listener, PacketListener {
                 }
 
                 handleEvent(recorded, event);
-
-                if ("entity_death".equals(type)) {
-                    recorded.destroy();
-                    recordedEntities.remove(uuid);
-                }
 
                 tick++;
             }
@@ -275,12 +284,13 @@ public class ReplaySession implements Listener, PacketListener {
 
         switch (type) {
             case "player_move", "entity_move" -> {
+                World world = Bukkit.getWorld(asString(event.get("world")));
                 Double x = asDouble(event.get("x"));
                 Double y = asDouble(event.get("y"));
                 Double z = asDouble(event.get("z"));
                 if (x == null || y == null || z == null) return;
 
-                Location loc = new Location(viewer.getWorld(), x, y, z,
+                Location loc = new Location(world, x, y, z,
                         asFloat(event.get("yaw")), asFloat(event.get("pitch")));
                 entity.moveTo(loc);
 
@@ -322,7 +332,9 @@ public class ReplaySession implements Listener, PacketListener {
             }
             case "entity_death" -> {
                 entity.showDeath(event);
+                deadEntities.add(entity.uuid);
                 entity.destroy();
+                recordedEntities.remove(entity.uuid);
             }
             case "inventory_update" -> {
                 if (entity instanceof RecordedPlayer rp) {
@@ -360,7 +372,7 @@ public class ReplaySession implements Listener, PacketListener {
     }
 
     private void spawnFakeMob(RecordedEntity entity, Map<String, Object> event) {
-        Location loc = new Location(viewer.getWorld(),
+        Location loc = new Location(Bukkit.getWorld(asString(event.get("world"))),
                 asDouble(event.get("x")),
                 asDouble(event.get("y")),
                 asDouble(event.get("z")),
@@ -385,6 +397,10 @@ public class ReplaySession implements Listener, PacketListener {
 
     private Float asFloat(Object obj) {
         return obj instanceof Number n ? n.floatValue() : 0f;
+    }
+
+    private String asString(Object obj) {
+        return obj instanceof String s ? String.valueOf(s) : null;
     }
 
     private void giveReplayControls(Player viewer) {
