@@ -268,75 +268,6 @@ public class RecordedPlayer extends RecordedEntity {
         return item != null ? item : new ItemStack(Material.AIR);
     }
 
-
-
-    /*public void showInventorySnapshot(Map<String, Object> event) {
-        boolean changed = false;
-        List<Equipment> packets = new ArrayList<>();
-
-        ItemStack mainHand = deserializeItem(event.get("mainHand"));
-
-        if (!areItemsEqual(mainHand, lastMainHand)) {
-            lastMainHand = mainHand != null ? mainHand.clone() : new ItemStack(Material.AIR);
-            changed = true;
-        }
-
-        ItemStack offHand = deserializeItem(event.get("offHand"));
-        if (!areItemsEqual(offHand, lastOffHand)) {
-            lastOffHand = offHand != null ? offHand.clone() : new ItemStack(Material.AIR);
-            changed = true;
-        }
-
-        EquipmentSlot[] armorSlots = {EquipmentSlot.BOOTS, EquipmentSlot.LEGGINGS, EquipmentSlot.CHEST_PLATE, EquipmentSlot.HELMET};
-        List<Map<String, Object>> rawArmorList =
-                (List<Map<String, Object>>) event.get("armor");
-
-        if (rawArmorList != null) {
-            for (int i = 0; i < armorSlots.length; i++) {
-                ItemStack armorItem = extractArmor(rawArmorList, i);
-
-                if (!areItemsEqual(armorItem, lastArmor[i])) {
-                    lastArmor[i] = armorItem.clone();
-                    changed = true;
-                }
-            }
-        }
-
-        if (!changed) return;
-
-        packets.add(new Equipment(EquipmentSlot.MAIN_HAND,
-                SpigotConversionUtil.fromBukkitItemStack(lastMainHand)));
-
-        packets.add(new Equipment(EquipmentSlot.OFF_HAND,
-                SpigotConversionUtil.fromBukkitItemStack(lastOffHand)));
-
-        for (int i = 0; i < armorSlots.length; i++) {
-            packets.add(new Equipment(armorSlots[i],
-                    SpigotConversionUtil.fromBukkitItemStack(lastArmor[i])));
-        }
-
-        WrapperPlayServerEntityEquipment packet =
-                new WrapperPlayServerEntityEquipment(fakeEntityId, packets);
-
-        PacketEvents.getAPI().getPlayerManager().sendPacket(viewer, packet);
-    }
-     */
-
-   /* private ItemStack extractArmor(List<Map<String, Object>> rawArmorList, int index) {
-        if (rawArmorList == null || index >= rawArmorList.size()) {
-            return new ItemStack(Material.AIR);
-        }
-
-        Object obj = rawArmorList.get(index);
-        if (!(obj instanceof Map<?, ?> armorMap)) {
-            return new ItemStack(Material.AIR);
-        }
-
-        ItemStack item = deserializeItem((Map<String, Object>) armorMap);
-        return item != null ? item : new ItemStack(Material.AIR);
-    }
-    */
-
     private boolean areItemsEqual(ItemStack a, ItemStack b) {
         if (a == null && b == null) return true;
         if (a == null || b == null) return false;
@@ -353,39 +284,6 @@ public class RecordedPlayer extends RecordedEntity {
         if (!Objects.equals(metaA.getLore(), metaB.getLore())) return false;
 
         return true;
-    }
-
-  /*  private ItemStack deserializeItem(Map<String, Object> map) {
-        if (map == null) return null;
-
-        Material type = Material.valueOf((String) map.get("type"));
-        int amount = ((Number) map.get("amount")).intValue();
-        ItemStack item = new ItemStack(type, amount);
-
-        if (map.containsKey("displayName") || map.containsKey("lore")) {
-            ItemMeta meta = item.getItemMeta();
-            if (meta != null) {
-                if (map.containsKey("displayName")) meta.setDisplayName((String) map.get("displayName"));
-                if (map.containsKey("lore")) meta.setLore((List<String>) map.get("lore"));
-                item.setItemMeta(meta);
-            }
-        }
-
-        return item;
-    }
-   */
-
-    private Location deserializeLocation(Map<String, Object> map) {
-        if (map == null)
-            return null;
-        double x = ((Number) map.get("x")).doubleValue();
-        double y = ((Number) map.get("y")).doubleValue();
-        double z = ((Number) map.get("z")).doubleValue();
-        float yaw = map.get("yaw") instanceof Number n ? n.floatValue() : 0f;
-        float pitch = map.get("pitch") instanceof Number n ? n.floatValue() : 0f;
-        String world = map.get("world").toString();
-
-        return new Location(Bukkit.getWorld(world), x, y, z, yaw, pitch);
     }
 
     public void openInventoryForViewer(Player viewer) {
@@ -409,22 +307,6 @@ public class RecordedPlayer extends RecordedEntity {
         inv.setItem(40, deserializeItem(currentInventory.get("offHand")));
 
 
-    /*    List<Map<String, Object>> contents = (List<Map<String, Object>>) currentInventory.get("contents");
-        if (contents != null) {
-            for (int i = 0; i < contents.size() && i < 36; i++) {
-                inv.setItem(i, deserializeItem(contents.get(i)));
-            }
-        }
-
-        List<Map<String, Object>> armor = (List<Map<String, Object>>) currentInventory.get("armor");
-        if (armor != null && armor.size() == 4) {
-            inv.setItem(39, deserializeItem(armor.get(3)));
-            inv.setItem(38, deserializeItem(armor.get(2)));
-            inv.setItem(37, deserializeItem(armor.get(1)));
-            inv.setItem(36, deserializeItem(armor.get(0)));
-        }
-     */
-
         inv.setItem(40, deserializeItem(currentInventory.get("offHand")));
 
         Replay.getInstance().getFoliaLib().getScheduler().runNextTick(task -> {
@@ -432,27 +314,6 @@ public class RecordedPlayer extends RecordedEntity {
         });
     }
 
-
-
-
-    /*private ItemStack deserializeItem(Object obj) {
-        if (!(obj instanceof Map<?, ?> map)) return null;
-        Material type = Material.getMaterial((String) map.get("type"));
-        if (type == null) return null;
-
-        int amount = map.get("amount") instanceof Number n ? n.intValue() : 1;
-        ItemStack item = new ItemStack(type, amount);
-
-        ItemMeta meta = item.getItemMeta();
-        if (meta != null) {
-            if (map.containsKey("displayName")) meta.setDisplayName((String) map.get("displayName"));
-            if (map.containsKey("lore")) meta.setLore((List<String>) map.get("lore"));
-            item.setItemMeta(meta);
-        }
-
-        return item;
-    }
-     */
 
 }
 

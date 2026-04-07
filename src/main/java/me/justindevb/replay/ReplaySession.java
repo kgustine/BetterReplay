@@ -11,7 +11,6 @@ import com.github.retrooper.packetevents.wrapper.play.client.WrapperPlayClientIn
 import com.github.retrooper.packetevents.wrapper.play.server.WrapperPlayServerDestroyEntities;
 import com.github.retrooper.packetevents.wrapper.play.server.WrapperPlayServerEntityMetadata;
 import com.github.retrooper.packetevents.wrapper.play.server.WrapperPlayServerSpawnEntity;
-import com.google.gson.Gson;
 import com.tcoded.folialib.wrapper.task.WrappedTask;
 import io.github.retrooper.packetevents.util.SpigotConversionUtil;
 import io.github.retrooper.packetevents.util.SpigotReflectionUtil;
@@ -36,10 +35,6 @@ import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.meta.ItemMeta;
 import org.bukkit.inventory.meta.SkullMeta;
-import org.bukkit.util.io.BukkitObjectInputStream;
-
-import java.io.ByteArrayInputStream;
-import java.io.IOException;
 import java.util.*;
 
 import static me.justindevb.replay.util.ItemStackSerializer.deserializeItem;
@@ -630,27 +625,6 @@ public class ReplaySession implements Listener, PacketListener {
     private boolean isActive() {
         return ReplayRegistry.contains(this);
     }
-
-
-   /* private ItemStack deserializeItem(Map<String, Object> map) {
-        if (map == null) return null;
-
-        Material type = Material.valueOf((String) map.get("type"));
-        int amount = ((Number) map.get("amount")).intValue();
-        ItemStack item = new ItemStack(type, amount);
-
-        if (map.containsKey("displayName") || map.containsKey("lore")) {
-            ItemMeta meta = item.getItemMeta();
-            if (meta != null) {
-                if (map.containsKey("displayName")) meta.setDisplayName((String) map.get("displayName"));
-                if (map.containsKey("lore")) meta.setLore((List<String>) map.get("lore"));
-                item.setItemMeta(meta);
-            }
-        }
-
-        return item;
-    }
-    */
 
     private Location deserializeLocation(Map<String, Object> map) {
         if (map == null)

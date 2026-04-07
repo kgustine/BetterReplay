@@ -4,8 +4,6 @@ import com.github.retrooper.packetevents.event.PacketListener;
 import com.github.retrooper.packetevents.event.PacketSendEvent;
 import com.github.retrooper.packetevents.protocol.packettype.PacketType;
 import com.github.retrooper.packetevents.wrapper.play.server.WrapperPlayServerBlockBreakAnimation;
-import com.google.gson.Gson;
-import com.google.gson.GsonBuilder;
 import io.github.retrooper.packetevents.util.SpigotConversionUtil;
 import me.justindevb.replay.util.ReplayObject;
 import org.bukkit.Bukkit;
@@ -27,11 +25,7 @@ import org.bukkit.event.entity.PlayerDeathEvent;
 import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.player.*;
 import org.bukkit.inventory.ItemStack;
-import org.bukkit.util.io.BukkitObjectOutputStream;
-
-import java.io.ByteArrayOutputStream;
 import java.io.File;
-import java.io.IOException;
 import java.util.*;
 
 import static me.justindevb.replay.util.ItemStackSerializer.serializeItem;
@@ -41,7 +35,6 @@ public class RecordingSession implements Listener, PacketListener {
     private final Replay replay;
     private final String name;
     private final File file;
-    private final Gson gson;
     private final Set<UUID> trackedPlayers;
     private final Map<UUID, EntityType> trackedEntities = new HashMap<>();
     private final List<Map<String, Object>> timeline = new ArrayList<>();
@@ -55,7 +48,6 @@ public class RecordingSession implements Listener, PacketListener {
     public RecordingSession(String name, File folder, Collection<Player> players, int durationSeconds) {
         this.name = name;
         this.file = new File(folder, "replays/" + name + ".json");
-        this.gson = new GsonBuilder().setPrettyPrinting().create();
         this.trackedPlayers = new HashSet<>();
         for (Player p : players) this.trackedPlayers.add(p.getUniqueId());
         this.durationTicks = durationSeconds > 0 ? durationSeconds * 20 : -1;
@@ -517,48 +509,6 @@ public class RecordingSession implements Listener, PacketListener {
         timeline.add(event);
         return invSnapshot;
     }
-
-
-    /*private Map<String, Object> captureInventory(Player p) {
-        Map<String, Object> invSnapshot = new HashMap<>();
-
-        invSnapshot.put("mainHand", serializeItem(p.getInventory().getItemInMainHand()));
-        invSnapshot.put("offHand", serializeItem(p.getInventory().getItemInOffHand()));
-
-        List<Map<String, Object>> armor = new ArrayList<>(4);
-        armor.add(serializeItem(p.getInventory().getBoots()));
-        armor.add(serializeItem(p.getInventory().getLeggings()));
-        armor.add(serializeItem(p.getInventory().getChestplate()));
-        armor.add(serializeItem(p.getInventory().getHelmet()));
-        invSnapshot.put("armor", armor);
-
-        List<Map<String, Object>> items = new ArrayList<>();
-        for (ItemStack item : p.getInventory().getContents()) {
-            items.add(serializeItem(item));
-        }
-        invSnapshot.put("contents", items);
-
-        Map<String, Object> event = new HashMap<>();
-        event.put("tick", tick);
-        event.put("type", "inventory_update");
-        event.put("uuid", p.getUniqueId().toString());
-        event.put("inventory", invSnapshot);
-
-        timeline.add(event);
-        return invSnapshot;
-    }
-     */
-
-   /* private Map<String, Object> serializeItem(ItemStack item) {
-        if (item == null) return null;
-
-        Map<String, Object> map = new HashMap<>();
-        map.put("type", item.getType().name());
-        map.put("amount", item.getAmount());
-        map.put("meta", item.hasItemMeta() ? item.getItemMeta().serialize() : null);
-        return map;
-    }
-    */
 
     private Map<String, Object> serializeLocation(org.bukkit.Location loc) {
         Map<String, Object> map = new HashMap<>();
