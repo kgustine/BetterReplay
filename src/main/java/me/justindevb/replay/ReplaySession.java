@@ -53,6 +53,7 @@ public class ReplaySession implements Listener, PacketListener {
     private final Map<UUID, RecordedEntity> recordedEntities = new HashMap<>();
     private final Map<BlockKey, String> originalBlockStates = new HashMap<>();
     private final Set<BlockKey> visibleBreakStages = new HashSet<>();
+    private int blockBreakMutationEpoch = 0;
     private int tick = 0;
     private boolean paused = false;
     private ItemStack[] viewerInventory;
@@ -253,6 +254,7 @@ public class ReplaySession implements Listener, PacketListener {
         recordedEntities.clear();
 
         clearFakeItems();
+        blockBreakMutationEpoch++;
         clearAllVisibleBreakStages();
         restoreReplayBlockStates();
         restoreInventory();
@@ -327,7 +329,7 @@ public class ReplaySession implements Listener, PacketListener {
                 }
 
                 if ("block_place".equals(type) || "block_break".equals(type)) {
-                    applyReplayBlockChange(event, type);
+                    applyReplayBlockChange(event, type, false);
                 }
             }
             case "block_break_stage" -> {
@@ -641,7 +643,7 @@ public class ReplaySession implements Listener, PacketListener {
         return new BlockKey(worldName, x, y, z);
     }
 
-    private void applyReplayBlockChange(Map<String, Object> event, String type) {
+    private void applyReplayBlockChange(Map<String, Object> event, String type, boolean immediateBreakRemoval) {
         String worldName = asString(event.get("world"));
         Integer x = asInt(event.get("x"));
         Integer y = asInt(event.get("y"));
@@ -682,8 +684,19 @@ public class ReplaySession implements Listener, PacketListener {
         }
 
         Location blockLoc = new Location(world, x, y, z);
+        if (immediateBreakRemoval) {
+            viewer.sendBlockChange(blockLoc, Material.AIR.createBlockData());
+            return;
+        }
+
+        int mutationEpoch = blockBreakMutationEpoch;
         replay.getFoliaLib().getScheduler().runLater(
-                () -> viewer.sendBlockChange(blockLoc, Material.AIR.createBlockData()),
+                () -> {
+                    if (mutationEpoch != blockBreakMutationEpoch || !isActive()) {
+                        return;
+                    }
+                    viewer.sendBlockChange(blockLoc, Material.AIR.createBlockData());
+                },
             3L
         );
     }
@@ -869,8 +882,8 @@ public class ReplaySession implements Listener, PacketListener {
             return;
         }
 
-        int currentIndex = Math.max(0, Math.min(tick, timeline.size() - 1));
-        int currentRecordedTick = getRecordedTickAtIndex(currentIndex);
+        int currentIndex = Math.max(0, Math.min(tick, timeline.size()));
+        int currentRecordedTick = currentIndex > 0 ? getRecordedTickAtIndex(currentIndex - 1) : 0;
         int maxRecordedTick = getRecordedTickAtIndex(timeline.size() - 1);
 
         int targetRecordedTick = currentRecordedTick + (seconds * 20);
@@ -882,6 +895,10 @@ public class ReplaySession implements Listener, PacketListener {
         }
 
         int targetIndex = findTimelineIndexAfterRecordedTick(targetRecordedTick);
+
+        if (targetIndex != currentIndex) {
+            blockBreakMutationEpoch++;
+        }
 
         if (targetIndex > currentIndex) {
             applyReplayBlockChangesInRange(currentIndex, targetIndex);
@@ -931,7 +948,7 @@ public class ReplaySession implements Listener, PacketListener {
             Map<String, Object> event = timeline.get(i);
             String type = asString(event.get("type"));
             if ("block_place".equals(type) || "block_break".equals(type)) {
-                applyReplayBlockChange(event, type);
+                applyReplayBlockChange(event, type, true);
             } else if ("block_break_stage".equals(type)) {
                 showGlobalBlockBreakStage(event);
             }
