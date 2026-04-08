@@ -693,13 +693,14 @@ public class ReplaySession implements Listener, PacketListener {
     }
 
     private void restoreSessionBaseline() {
-        for (Map.Entry<BlockKey, String> entry : sessionBaseline.entrySet()) {
-            BlockKey key = entry.getKey();
+        for (BlockKey key : sessionBaseline.keySet()) {
             World world = Bukkit.getWorld(key.world());
             if (world == null) {
                 continue;
             }
-            sendBlockStateToViewer(world, key.x(), key.y(), key.z(), entry.getValue());
+            // Send the actual real-world state so the client view matches the server world.
+            String realBlockData = world.getBlockAt(key.x(), key.y(), key.z()).getBlockData().getAsString();
+            sendBlockStateToViewer(world, key.x(), key.y(), key.z(), realBlockData);
         }
     }
 
