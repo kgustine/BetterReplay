@@ -51,7 +51,7 @@ public class ReplaySession implements Listener, PacketListener {
     private final Set<Integer> trackedEntityIds = new HashSet<>();
     private final Set<UUID> deadEntities = new HashSet<>();
     private final Map<UUID, RecordedEntity> recordedEntities = new HashMap<>();
-    private final Map<BlockKey, String> originalBlockStates = new HashMap<>();
+    private final Map<BlockKey, String> sessionBaseline = new HashMap<>();
     private final Set<BlockKey> visibleBreakStages = new HashSet<>();
     private int blockBreakMutationEpoch = 0;
     private int tick = 0;
@@ -256,7 +256,7 @@ public class ReplaySession implements Listener, PacketListener {
         clearFakeItems();
         blockBreakMutationEpoch++;
         clearAllVisibleBreakStages();
-        restoreReplayBlockStates(true);
+        restoreSessionBaseline();
         restoreInventory();
         if (replayTask != null) {
             replay.getFoliaLib().getScheduler().cancelTask(replayTask);
@@ -430,7 +430,7 @@ public class ReplaySession implements Listener, PacketListener {
     }
 
     private void primeInitialBrokenBlockStates() {
-        Map<BlockKey, Map<String, Object>> firstMutationEventByKey = new HashMap<>();
+        Map<BlockKey, Map<String, Object>> firstMutationEventByKey = new LinkedHashMap<>();
         String airBlockData = Material.AIR.createBlockData().getAsString();
 
         for (Map<String, Object> event : timeline) {
@@ -473,9 +473,9 @@ public class ReplaySession implements Listener, PacketListener {
             if ("block_break".equals(type)) {
                 String blockData = asString(event.get("blockData"));
                 if (blockData != null) {
-                    seedOriginalBlockState(key, blockData);
+                    sessionBaseline.put(key, blockData);
                 } else {
-                    cacheOriginalBlockState(world, key);
+                    sessionBaseline.put(key, world.getBlockAt(x, y, z).getBlockData().getAsString());
                 }
 
                 if (blockData != null) {
@@ -486,7 +486,7 @@ public class ReplaySession implements Listener, PacketListener {
 
             String replacedBlockData = asString(event.get("replacedBlockData"));
             if (replacedBlockData != null) {
-                seedOriginalBlockState(key, replacedBlockData);
+                sessionBaseline.put(key, replacedBlockData);
                 sendBlockStateToViewer(world, x, y, z, replacedBlockData);
                 continue;
             }
@@ -503,21 +503,13 @@ public class ReplaySession implements Listener, PacketListener {
 
             String currentBlockData = world.getBlockAt(x, y, z).getBlockData().getAsString();
             if (!placedBlockData.equals(currentBlockData)) {
-                cacheOriginalBlockState(world, key);
+                sessionBaseline.put(key, currentBlockData);
                 continue;
             }
 
-            seedOriginalBlockState(key, airBlockData);
+            sessionBaseline.put(key, airBlockData);
             sendBlockStateToViewer(world, x, y, z, airBlockData);
         }
-    }
-
-    private void seedOriginalBlockState(BlockKey key, String blockData) {
-        if (blockData == null) {
-            return;
-        }
-
-        originalBlockStates.putIfAbsent(key, blockData);
     }
 
     private void enrichBlockBreakStageTimeline() {
@@ -659,7 +651,6 @@ public class ReplaySession implements Listener, PacketListener {
         }
 
         BlockKey key = new BlockKey(worldName, x, y, z);
-        cacheOriginalBlockState(world, key);
         clearVisibleBreakStage(key);
 
         if ("block_place".equals(type)) {
@@ -676,7 +667,7 @@ public class ReplaySession implements Listener, PacketListener {
 
         String brokenBlockData = asString(event.get("blockData"));
         if (brokenBlockData == null) {
-            brokenBlockData = originalBlockStates.get(key);
+            brokenBlockData = sessionBaseline.get(key);
         }
 
         if (brokenBlockData != null) {
@@ -701,11 +692,15 @@ public class ReplaySession implements Listener, PacketListener {
         );
     }
 
-    private void cacheOriginalBlockState(World world, BlockKey key) {
-        originalBlockStates.computeIfAbsent(
-                key,
-                ignored -> world.getBlockAt(key.x(), key.y(), key.z()).getBlockData().getAsString()
-        );
+    private void restoreSessionBaseline() {
+        for (Map.Entry<BlockKey, String> entry : sessionBaseline.entrySet()) {
+            BlockKey key = entry.getKey();
+            World world = Bukkit.getWorld(key.world());
+            if (world == null) {
+                continue;
+            }
+            sendBlockStateToViewer(world, key.x(), key.y(), key.z(), entry.getValue());
+        }
     }
 
     private void sendBlockStateToViewer(World world, int x, int y, int z, String blockData) {
@@ -784,17 +779,35 @@ public class ReplaySession implements Listener, PacketListener {
         }
     }
 
-    private void restoreReplayBlockStates(boolean clearAfterRestore) {
-        for (Map.Entry<BlockKey, String> entry : originalBlockStates.entrySet()) {
+    private void computeAndApplyBlockStateAtIndex(int targetIndexExclusive) {
+        String airBlockData = Material.AIR.createBlockData().getAsString();
+        Map<BlockKey, String> stateAtTarget = new HashMap<>(sessionBaseline);
+
+        int end = Math.max(0, Math.min(targetIndexExclusive, timeline.size()));
+        for (int i = 0; i < end; i++) {
+            Map<String, Object> event = timeline.get(i);
+            String type = asString(event.get("type"));
+            if ("block_place".equals(type)) {
+                BlockKey key = blockKeyFromEvent(event);
+                String bd = asString(event.get("blockData"));
+                if (bd == null) bd = asString(event.get("block"));
+                if (key != null && bd != null) {
+                    stateAtTarget.put(key, bd);
+                }
+            } else if ("block_break".equals(type)) {
+                BlockKey key = blockKeyFromEvent(event);
+                if (key != null) {
+                    stateAtTarget.put(key, airBlockData);
+                }
+            }
+        }
+
+        for (Map.Entry<BlockKey, String> entry : stateAtTarget.entrySet()) {
             BlockKey key = entry.getKey();
             World world = Bukkit.getWorld(key.world());
-            if (world == null) {
-                continue;
+            if (world != null) {
+                sendBlockStateToViewer(world, key.x(), key.y(), key.z(), entry.getValue());
             }
-            sendBlockStateToViewer(world, key.x(), key.y(), key.z(), entry.getValue());
-        }
-        if (clearAfterRestore) {
-            originalBlockStates.clear();
         }
     }
 
@@ -958,9 +971,8 @@ public class ReplaySession implements Listener, PacketListener {
     }
 
     private void rebuildReplayBlockStateUntil(int targetIndexExclusive) {
-        restoreReplayBlockStates(false);
         clearAllVisibleBreakStages();
-        applyReplayBlockChangesInRange(0, targetIndexExclusive);
+        computeAndApplyBlockStateAtIndex(targetIndexExclusive);
     }
 
     @EventHandler(priority = EventPriority.HIGH)
