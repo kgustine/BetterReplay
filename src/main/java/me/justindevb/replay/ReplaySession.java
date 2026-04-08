@@ -52,6 +52,7 @@ public class ReplaySession implements Listener, PacketListener {
     private final Set<UUID> deadEntities = new HashSet<>();
     private final Map<UUID, RecordedEntity> recordedEntities = new HashMap<>();
     private final Map<BlockKey, String> originalBlockStates = new HashMap<>();
+    private final Set<BlockKey> visibleBreakStages = new HashSet<>();
     private int tick = 0;
     private boolean paused = false;
     private ItemStack[] viewerInventory;
@@ -252,6 +253,7 @@ public class ReplaySession implements Listener, PacketListener {
         recordedEntities.clear();
 
         clearFakeItems();
+        clearAllVisibleBreakStages();
         restoreReplayBlockStates();
         restoreInventory();
         if (replayTask != null) {
@@ -598,6 +600,7 @@ public class ReplaySession implements Listener, PacketListener {
 
         BlockKey key = new BlockKey(worldName, x, y, z);
         cacheOriginalBlockState(world, key);
+        clearVisibleBreakStage(key);
 
         if ("block_place".equals(type)) {
             String blockData = asString(event.get("blockData"));
@@ -673,11 +676,41 @@ public class ReplaySession implements Listener, PacketListener {
             return;
         }
 
+        BlockKey key = worldName != null ? new BlockKey(worldName, x, y, z) : null;
+        if (stage < 0) {
+            if (key != null) {
+                visibleBreakStages.remove(key);
+            }
+            return;
+        }
+
         int animationId = Objects.hash(worldName, x, y, z);
         WrapperPlayServerBlockBreakAnimation breakAnim =
             new WrapperPlayServerBlockBreakAnimation(animationId, new Vector3i(x, y, z), stage.byteValue());
 
         PacketEvents.getAPI().getPlayerManager().sendPacket(viewer, breakAnim);
+        if (key != null) {
+            visibleBreakStages.add(key);
+        }
+    }
+
+    private void clearVisibleBreakStage(BlockKey key) {
+        int animationId = Objects.hash(key.world(), key.x(), key.y(), key.z());
+        WrapperPlayServerBlockBreakAnimation clearAnim =
+                new WrapperPlayServerBlockBreakAnimation(animationId, new Vector3i(key.x(), key.y(), key.z()), (byte) -1);
+        PacketEvents.getAPI().getPlayerManager().sendPacket(viewer, clearAnim);
+        visibleBreakStages.remove(key);
+    }
+
+    private void clearAllVisibleBreakStages() {
+        if (visibleBreakStages.isEmpty()) {
+            return;
+        }
+
+        Set<BlockKey> staged = new HashSet<>(visibleBreakStages);
+        for (BlockKey key : staged) {
+            clearVisibleBreakStage(key);
+        }
     }
 
     private void restoreReplayBlockStates() {
@@ -790,7 +823,7 @@ public class ReplaySession implements Listener, PacketListener {
             targetRecordedTick = maxRecordedTick;
         }
 
-        int targetIndex = findTimelineIndexAtOrAfterRecordedTick(targetRecordedTick);
+        int targetIndex = findTimelineIndexAfterRecordedTick(targetRecordedTick);
 
         if (targetIndex > currentIndex) {
             applyReplayBlockChangesInRange(currentIndex, targetIndex);
@@ -812,16 +845,16 @@ public class ReplaySession implements Listener, PacketListener {
         return eventTick != null ? eventTick : safeIndex;
     }
 
-    private int findTimelineIndexAtOrAfterRecordedTick(int targetRecordedTick) {
+    private int findTimelineIndexAfterRecordedTick(int targetRecordedTick) {
         int low = 0;
         int high = timeline.size() - 1;
-        int result = timeline.size() - 1;
+        int result = timeline.size();
 
         while (low <= high) {
             int mid = (low + high) >>> 1;
             int midTick = getRecordedTickAtIndex(mid);
 
-            if (midTick >= targetRecordedTick) {
+            if (midTick > targetRecordedTick) {
                 result = mid;
                 high = mid - 1;
             } else {
@@ -829,7 +862,7 @@ public class ReplaySession implements Listener, PacketListener {
             }
         }
 
-        return Math.max(0, Math.min(result, timeline.size() - 1));
+        return Math.max(0, Math.min(result, timeline.size()));
     }
 
     private void applyReplayBlockChangesInRange(int fromIndex, int toIndexExclusive) {
@@ -841,13 +874,15 @@ public class ReplaySession implements Listener, PacketListener {
             String type = asString(event.get("type"));
             if ("block_place".equals(type) || "block_break".equals(type)) {
                 applyReplayBlockChange(event, type);
+            } else if ("block_break_stage".equals(type)) {
+                showGlobalBlockBreakStage(event);
             }
         }
     }
 
     private void rebuildReplayBlockStateUntil(int targetIndexExclusive) {
         restoreReplayBlockStates();
-        primeInitialBrokenBlockStates();
+        clearAllVisibleBreakStages();
         applyReplayBlockChangesInRange(0, targetIndexExclusive);
     }
 
