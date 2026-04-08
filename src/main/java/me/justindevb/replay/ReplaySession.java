@@ -311,8 +311,7 @@ public class ReplaySession implements Listener, PacketListener {
                         case "sneak_start", "sneak_stop" -> rp.updateSneak(type.equals("sneak_start"));
                         case "attack" -> rp.playAttackAnimation();
                         case "block_place" -> rp.showBlockPlace(event);
-                        case "block_break" -> {
-                        }
+                        case "block_break" -> rp.showBlockBreak(event);
                     }
                 }
 
@@ -480,7 +479,20 @@ public class ReplaySession implements Listener, PacketListener {
             return;
         }
 
-        viewer.sendBlockChange(new Location(world, x, y, z), Material.AIR.createBlockData());
+        String brokenBlockData = asString(event.get("blockData"));
+        if (brokenBlockData == null) {
+            brokenBlockData = originalBlockStates.get(key);
+        }
+
+        if (brokenBlockData != null) {
+            sendBlockBreakParticles(world, x, y, z, brokenBlockData);
+        }
+
+        Location blockLoc = new Location(world, x, y, z);
+        replay.getFoliaLib().getScheduler().runLater(
+                () -> viewer.sendBlockChange(blockLoc, Material.AIR.createBlockData()),
+                1L
+        );
     }
 
     private void cacheOriginalBlockState(World world, BlockKey key) {
@@ -493,6 +505,23 @@ public class ReplaySession implements Listener, PacketListener {
     private void sendBlockStateToViewer(World world, int x, int y, int z, String blockData) {
         try {
             viewer.sendBlockChange(new Location(world, x, y, z), Bukkit.createBlockData(blockData));
+        } catch (IllegalArgumentException ignored) {
+        }
+    }
+
+    private void sendBlockBreakParticles(World world, int x, int y, int z, String blockData) {
+        try {
+            Location center = new Location(world, x + 0.5, y + 0.5, z + 0.5);
+            viewer.spawnParticle(
+                    Particle.BLOCK,
+                    center,
+                    24,
+                    0.25,
+                    0.25,
+                    0.25,
+                    0.02,
+                    Bukkit.createBlockData(blockData)
+            );
         } catch (IllegalArgumentException ignored) {
         }
     }
