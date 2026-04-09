@@ -56,6 +56,7 @@ public class ReplaySession implements Listener, PacketListener {
     private int blockBreakMutationEpoch = 0;
     private int tick = 0;
     private boolean paused = false;
+    private volatile long lastEntityInteractNanos = 0;
     private ItemStack[] viewerInventory;
     private ItemStack[] viewerArmor;
     private ItemStack viewerOffHand;
@@ -814,17 +815,17 @@ public class ReplaySession implements Listener, PacketListener {
 
     private void giveReplayControls(Player viewer) {
 
-        ItemStack pauseButton = new ItemStack(Material.REDSTONE_BLOCK);
+        ItemStack pauseButton = new ItemStack(Material.RED_DYE);
         ItemMeta pauseMeta = pauseButton.getItemMeta();
         pauseMeta.setDisplayName("§cPause / Play");
         pauseButton.setItemMeta(pauseMeta);
 
-        ItemStack skipForward = new ItemStack(Material.LIME_CONCRETE);
+        ItemStack skipForward = new ItemStack(Material.LIME_DYE);
         ItemMeta forwardMeta = skipForward.getItemMeta();
         forwardMeta.setDisplayName("§a+5 seconds");
         skipForward.setItemMeta(forwardMeta);
 
-        ItemStack skipBackward = new ItemStack(Material.YELLOW_CONCRETE);
+        ItemStack skipBackward = new ItemStack(Material.YELLOW_DYE);
         ItemMeta backwardMeta = skipBackward.getItemMeta();
         backwardMeta.setDisplayName("§e-5 seconds");
         skipBackward.setItemMeta(backwardMeta);
@@ -877,6 +878,12 @@ public class ReplaySession implements Listener, PacketListener {
             return;
 
         String name = handItem.getItemMeta().getDisplayName();
+
+        // If the player is clicking on a recorded entity, skip the control action
+        if (System.nanoTime() - lastEntityInteractNanos < 100_000_000L) {
+            e.setCancelled(true);
+            return;
+        }
 
         switch (name) {
             case "§cPause / Play" -> togglePause();
@@ -1175,8 +1182,10 @@ public class ReplaySession implements Listener, PacketListener {
         WrapperPlayClientInteractEntity wrapper = new WrapperPlayClientInteractEntity(event);
 
 
-        if (trackedEntityIds.contains(wrapper.getEntityId()))
+        if (trackedEntityIds.contains(wrapper.getEntityId())) {
+            lastEntityInteractNanos = System.nanoTime();
             event.setCancelled(true);
+        }
 
         int entityId = wrapper.getEntityId();
         RecordedEntity recordedEntity = recordedEntities.values()
@@ -1184,6 +1193,10 @@ public class ReplaySession implements Listener, PacketListener {
                 .filter(e -> e.getFakeEntityId() == entityId)
                 .findFirst()
                 .orElse(null);
+
+        if (recordedEntity != null) {
+            lastEntityInteractNanos = System.nanoTime();
+        }
 
         if (recordedEntity instanceof RecordedPlayer rp) {
             rp.openInventoryForViewer(viewer);
