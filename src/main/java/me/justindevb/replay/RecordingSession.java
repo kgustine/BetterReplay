@@ -188,6 +188,7 @@ public class RecordingSession implements Listener, PacketListener {
         event.put("y", e.getBlock().getY());
         event.put("z", e.getBlock().getZ());
         event.put("blockData", e.getBlock().getBlockData().getAsString());
+        event.put("replacedBlockData", e.getBlockReplacedState().getBlockData().getAsString());
         timeline.add(event);
     }
 

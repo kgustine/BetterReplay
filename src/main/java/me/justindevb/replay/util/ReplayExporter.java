@@ -173,6 +173,8 @@ public class ReplayExporter {
                 out.put("y", raw.get("y"));
                 out.put("z", raw.get("z"));
                 out.put("block", raw.get("block"));
+                out.put("blockData", raw.get("blockData"));
+                out.put("replacedBlockData", raw.get("replacedBlockData"));
                 return out;
 
             case "block_break":

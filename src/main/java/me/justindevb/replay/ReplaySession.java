@@ -51,7 +51,9 @@ public class ReplaySession implements Listener, PacketListener {
     private final Set<Integer> trackedEntityIds = new HashSet<>();
     private final Set<UUID> deadEntities = new HashSet<>();
     private final Map<UUID, RecordedEntity> recordedEntities = new HashMap<>();
-    private final Map<BlockKey, String> originalBlockStates = new HashMap<>();
+    private final Map<BlockKey, String> sessionBaseline = new HashMap<>();
+    private final Set<BlockKey> visibleBreakStages = new HashSet<>();
+    private int blockBreakMutationEpoch = 0;
     private int tick = 0;
     private boolean paused = false;
     private ItemStack[] viewerInventory;
@@ -252,7 +254,9 @@ public class ReplaySession implements Listener, PacketListener {
         recordedEntities.clear();
 
         clearFakeItems();
-        restoreReplayBlockStates();
+        blockBreakMutationEpoch++;
+        clearAllVisibleBreakStages();
+        restoreSessionBaseline();
         restoreInventory();
         if (replayTask != null) {
             replay.getFoliaLib().getScheduler().cancelTask(replayTask);
@@ -325,7 +329,7 @@ public class ReplaySession implements Listener, PacketListener {
                 }
 
                 if ("block_place".equals(type) || "block_break".equals(type)) {
-                    applyReplayBlockChange(event, type);
+                    applyReplayBlockChange(event, type, false);
                 }
             }
             case "block_break_stage" -> {
@@ -426,10 +430,29 @@ public class ReplaySession implements Listener, PacketListener {
     }
 
     private void primeInitialBrokenBlockStates() {
-        Set<BlockKey> primed = new HashSet<>();
+        Map<BlockKey, Map<String, Object>> firstMutationEventByKey = new LinkedHashMap<>();
+        String airBlockData = Material.AIR.createBlockData().getAsString();
 
         for (Map<String, Object> event : timeline) {
-            if (!"block_break".equals(event.get("type"))) {
+            String type = asString(event.get("type"));
+            if (!"block_break".equals(type) && !"block_place".equals(type)) {
+                continue;
+            }
+
+            BlockKey key = blockKeyFromEvent(event);
+            if (key == null) {
+                continue;
+            }
+
+            firstMutationEventByKey.putIfAbsent(key, event);
+        }
+
+        for (Map.Entry<BlockKey, Map<String, Object>> entry : firstMutationEventByKey.entrySet()) {
+            BlockKey key = entry.getKey();
+            Map<String, Object> event = entry.getValue();
+            String type = asString(event.get("type"));
+
+            if (type == null) {
                 continue;
             }
 
@@ -437,9 +460,8 @@ public class ReplaySession implements Listener, PacketListener {
             Integer x = asInt(event.get("x"));
             Integer y = asInt(event.get("y"));
             Integer z = asInt(event.get("z"));
-            String blockData = asString(event.get("blockData"));
 
-            if (worldName == null || x == null || y == null || z == null || blockData == null) {
+            if (worldName == null || x == null || y == null || z == null) {
                 continue;
             }
 
@@ -448,13 +470,45 @@ public class ReplaySession implements Listener, PacketListener {
                 continue;
             }
 
-            BlockKey key = new BlockKey(worldName, x, y, z);
-            if (!primed.add(key)) {
+            if ("block_break".equals(type)) {
+                String blockData = asString(event.get("blockData"));
+                if (blockData != null) {
+                    sessionBaseline.put(key, blockData);
+                } else {
+                    sessionBaseline.put(key, world.getBlockAt(x, y, z).getBlockData().getAsString());
+                }
+
+                if (blockData != null) {
+                    sendBlockStateToViewer(world, x, y, z, blockData);
+                }
                 continue;
             }
 
-            cacheOriginalBlockState(world, key);
-            sendBlockStateToViewer(world, x, y, z, blockData);
+            String replacedBlockData = asString(event.get("replacedBlockData"));
+            if (replacedBlockData != null) {
+                sessionBaseline.put(key, replacedBlockData);
+                sendBlockStateToViewer(world, x, y, z, replacedBlockData);
+                continue;
+            }
+
+            // Backward compatibility for recordings without replacedBlockData.
+            String placedBlockData = asString(event.get("blockData"));
+            if (placedBlockData == null) {
+                placedBlockData = asString(event.get("block"));
+            }
+
+            if (placedBlockData == null) {
+                continue;
+            }
+
+            String currentBlockData = world.getBlockAt(x, y, z).getBlockData().getAsString();
+            if (!placedBlockData.equals(currentBlockData)) {
+                sessionBaseline.put(key, currentBlockData);
+                continue;
+            }
+
+            sessionBaseline.put(key, airBlockData);
+            sendBlockStateToViewer(world, x, y, z, airBlockData);
         }
     }
 
@@ -581,7 +635,7 @@ public class ReplaySession implements Listener, PacketListener {
         return new BlockKey(worldName, x, y, z);
     }
 
-    private void applyReplayBlockChange(Map<String, Object> event, String type) {
+    private void applyReplayBlockChange(Map<String, Object> event, String type, boolean immediateBreakRemoval) {
         String worldName = asString(event.get("world"));
         Integer x = asInt(event.get("x"));
         Integer y = asInt(event.get("y"));
@@ -597,7 +651,7 @@ public class ReplaySession implements Listener, PacketListener {
         }
 
         BlockKey key = new BlockKey(worldName, x, y, z);
-        cacheOriginalBlockState(world, key);
+        clearVisibleBreakStage(key);
 
         if ("block_place".equals(type)) {
             String blockData = asString(event.get("blockData"));
@@ -613,7 +667,7 @@ public class ReplaySession implements Listener, PacketListener {
 
         String brokenBlockData = asString(event.get("blockData"));
         if (brokenBlockData == null) {
-            brokenBlockData = originalBlockStates.get(key);
+            brokenBlockData = sessionBaseline.get(key);
         }
 
         if (brokenBlockData != null) {
@@ -621,17 +675,33 @@ public class ReplaySession implements Listener, PacketListener {
         }
 
         Location blockLoc = new Location(world, x, y, z);
+        if (immediateBreakRemoval) {
+            viewer.sendBlockChange(blockLoc, Material.AIR.createBlockData());
+            return;
+        }
+
+        int mutationEpoch = blockBreakMutationEpoch;
         replay.getFoliaLib().getScheduler().runLater(
-                () -> viewer.sendBlockChange(blockLoc, Material.AIR.createBlockData()),
+                () -> {
+                    if (mutationEpoch != blockBreakMutationEpoch || !isActive()) {
+                        return;
+                    }
+                    viewer.sendBlockChange(blockLoc, Material.AIR.createBlockData());
+                },
             3L
         );
     }
 
-    private void cacheOriginalBlockState(World world, BlockKey key) {
-        originalBlockStates.computeIfAbsent(
-                key,
-                ignored -> world.getBlockAt(key.x(), key.y(), key.z()).getBlockData().getAsString()
-        );
+    private void restoreSessionBaseline() {
+        for (BlockKey key : sessionBaseline.keySet()) {
+            World world = Bukkit.getWorld(key.world());
+            if (world == null) {
+                continue;
+            }
+            // Send the actual real-world state so the client view matches the server world.
+            String realBlockData = world.getBlockAt(key.x(), key.y(), key.z()).getBlockData().getAsString();
+            sendBlockStateToViewer(world, key.x(), key.y(), key.z(), realBlockData);
+        }
     }
 
     private void sendBlockStateToViewer(World world, int x, int y, int z, String blockData) {
@@ -673,23 +743,73 @@ public class ReplaySession implements Listener, PacketListener {
             return;
         }
 
+        BlockKey key = worldName != null ? new BlockKey(worldName, x, y, z) : null;
+        if (stage < 0) {
+            if (key != null) {
+                visibleBreakStages.remove(key);
+            }
+            return;
+        }
+
         int animationId = Objects.hash(worldName, x, y, z);
         WrapperPlayServerBlockBreakAnimation breakAnim =
             new WrapperPlayServerBlockBreakAnimation(animationId, new Vector3i(x, y, z), stage.byteValue());
 
         PacketEvents.getAPI().getPlayerManager().sendPacket(viewer, breakAnim);
+        if (key != null) {
+            visibleBreakStages.add(key);
+        }
     }
 
-    private void restoreReplayBlockStates() {
-        for (Map.Entry<BlockKey, String> entry : originalBlockStates.entrySet()) {
+    private void clearVisibleBreakStage(BlockKey key) {
+        int animationId = Objects.hash(key.world(), key.x(), key.y(), key.z());
+        WrapperPlayServerBlockBreakAnimation clearAnim =
+                new WrapperPlayServerBlockBreakAnimation(animationId, new Vector3i(key.x(), key.y(), key.z()), (byte) -1);
+        PacketEvents.getAPI().getPlayerManager().sendPacket(viewer, clearAnim);
+        visibleBreakStages.remove(key);
+    }
+
+    private void clearAllVisibleBreakStages() {
+        if (visibleBreakStages.isEmpty()) {
+            return;
+        }
+
+        Set<BlockKey> staged = new HashSet<>(visibleBreakStages);
+        for (BlockKey key : staged) {
+            clearVisibleBreakStage(key);
+        }
+    }
+
+    private void computeAndApplyBlockStateAtIndex(int targetIndexExclusive) {
+        String airBlockData = Material.AIR.createBlockData().getAsString();
+        Map<BlockKey, String> stateAtTarget = new HashMap<>(sessionBaseline);
+
+        int end = Math.max(0, Math.min(targetIndexExclusive, timeline.size()));
+        for (int i = 0; i < end; i++) {
+            Map<String, Object> event = timeline.get(i);
+            String type = asString(event.get("type"));
+            if ("block_place".equals(type)) {
+                BlockKey key = blockKeyFromEvent(event);
+                String bd = asString(event.get("blockData"));
+                if (bd == null) bd = asString(event.get("block"));
+                if (key != null && bd != null) {
+                    stateAtTarget.put(key, bd);
+                }
+            } else if ("block_break".equals(type)) {
+                BlockKey key = blockKeyFromEvent(event);
+                if (key != null) {
+                    stateAtTarget.put(key, airBlockData);
+                }
+            }
+        }
+
+        for (Map.Entry<BlockKey, String> entry : stateAtTarget.entrySet()) {
             BlockKey key = entry.getKey();
             World world = Bukkit.getWorld(key.world());
-            if (world == null) {
-                continue;
+            if (world != null) {
+                sendBlockStateToViewer(world, key.x(), key.y(), key.z(), entry.getValue());
             }
-            sendBlockStateToViewer(world, key.x(), key.y(), key.z(), entry.getValue());
         }
-        originalBlockStates.clear();
     }
 
     private void giveReplayControls(Player viewer) {
@@ -774,14 +894,177 @@ public class ReplaySession implements Listener, PacketListener {
     }
 
     private void skipSeconds(int seconds) {
-        tick += seconds * 20; // Assuming 20 ticks/sec
-        if (tick <= 0) tick = 1;
-        if (tick >= timeline.size()) tick = timeline.size() - 1;
-
-        Map<String, Object> event = timeline.get(tick);
-        for (RecordedEntity entity : recordedEntities.values()) {
-            handleEvent(entity, event);
+        if (timeline == null || timeline.isEmpty()) {
+            return;
         }
+
+        int currentIndex = Math.max(0, Math.min(tick, timeline.size()));
+        int currentRecordedTick = currentIndex > 0 ? getRecordedTickAtIndex(currentIndex - 1) : 0;
+        int maxRecordedTick = getRecordedTickAtIndex(timeline.size() - 1);
+
+        int targetRecordedTick = currentRecordedTick + (seconds * 20);
+        if (targetRecordedTick < 0) {
+            targetRecordedTick = 0;
+        }
+        if (targetRecordedTick > maxRecordedTick) {
+            targetRecordedTick = maxRecordedTick;
+        }
+
+        int targetIndex = findTimelineIndexAfterRecordedTick(targetRecordedTick);
+
+        if (targetIndex != currentIndex) {
+            blockBreakMutationEpoch++;
+        }
+
+        if (targetIndex > currentIndex) {
+            applyReplayBlockChangesInRange(currentIndex, targetIndex);
+        } else if (targetIndex < currentIndex) {
+            rebuildReplayBlockStateUntil(targetIndex);
+        }
+
+        syncEntityStatesAtIndex(targetIndex);
+
+        tick = targetIndex;
+        sendActionBar();
+    }
+
+    private void syncEntityStatesAtIndex(int targetIndex) {
+        Map<UUID, Map<String, Object>> firstEventByUUID = new LinkedHashMap<>();
+        Map<UUID, Map<String, Object>> lastLocationByUUID = new LinkedHashMap<>();
+        Set<UUID> shouldHaveQuitAtTarget = new HashSet<>();
+        Set<UUID> shouldBeDeadAtTarget = new HashSet<>();
+
+        int end = Math.min(targetIndex, timeline.size());
+        for (int i = 0; i < end; i++) {
+            Map<String, Object> event = timeline.get(i);
+            Object uuidObj = event.get("uuid");
+            if (!(uuidObj instanceof String uuidStr)) continue;
+            UUID uuid;
+            try {
+                uuid = UUID.fromString(uuidStr);
+            } catch (IllegalArgumentException ignored) {
+                continue;
+            }
+
+            String type = asString(event.get("type"));
+            firstEventByUUID.putIfAbsent(uuid, event);
+
+            switch (type != null ? type : "") {
+                case "player_move", "entity_move" -> lastLocationByUUID.put(uuid, event);
+                case "player_quit" -> shouldHaveQuitAtTarget.add(uuid);
+                case "entity_death" -> shouldBeDeadAtTarget.add(uuid);
+            }
+        }
+
+        // Rebuild deadEntities to reflect state at the seek target.
+        deadEntities.clear();
+        deadEntities.addAll(shouldBeDeadAtTarget);
+
+        Set<UUID> shouldExistAtTarget = new HashSet<>(firstEventByUUID.keySet());
+        shouldExistAtTarget.removeAll(shouldHaveQuitAtTarget);
+        shouldExistAtTarget.removeAll(shouldBeDeadAtTarget);
+
+        // Destroy entities that no longer belong at this point.
+        for (UUID uuid : new HashSet<>(recordedEntities.keySet())) {
+            if (!shouldExistAtTarget.contains(uuid)) {
+                RecordedEntity entity = recordedEntities.remove(uuid);
+                if (entity != null) {
+                    entity.destroy();
+                    trackedEntityIds.remove(entity.getFakeEntityId());
+                }
+            }
+        }
+
+        // Spawn entities that should exist but haven't been created yet.
+        for (UUID uuid : shouldExistAtTarget) {
+            if (recordedEntities.containsKey(uuid)) continue;
+            if (!lastLocationByUUID.containsKey(uuid)) continue;
+
+            Map<String, Object> firstEvent = firstEventByUUID.get(uuid);
+            Map<String, Object> locEvent = lastLocationByUUID.get(uuid);
+
+            Double x = asDouble(locEvent.get("x"));
+            Double y = asDouble(locEvent.get("y"));
+            Double z = asDouble(locEvent.get("z"));
+            String worldName = asString(locEvent.get("world"));
+            if (x == null || y == null || z == null || worldName == null) continue;
+            World world = Bukkit.getWorld(worldName);
+            if (world == null) continue;
+
+            RecordedEntity entity = RecordedEntityFactory.create(firstEvent, viewer);
+            if (entity == null) continue;
+
+            entity.spawn(new Location(world, x, y, z,
+                    asFloat(locEvent.get("yaw")), asFloat(locEvent.get("pitch"))));
+            recordedEntities.put(uuid, entity);
+            trackedEntityIds.add(entity.getFakeEntityId());
+        }
+
+        // Move all live entities to their last known position at the target index.
+        for (Map.Entry<UUID, Map<String, Object>> entry : lastLocationByUUID.entrySet()) {
+            RecordedEntity entity = recordedEntities.get(entry.getKey());
+            if (entity == null) continue;
+
+            Map<String, Object> event = entry.getValue();
+            World world = Bukkit.getWorld(asString(event.get("world")));
+            Double x = asDouble(event.get("x"));
+            Double y = asDouble(event.get("y"));
+            Double z = asDouble(event.get("z"));
+            if (world == null || x == null || y == null || z == null) continue;
+
+            entity.moveTo(new Location(world, x, y, z,
+                    asFloat(event.get("yaw")), asFloat(event.get("pitch"))));
+        }
+    }
+
+    private int getRecordedTickAtIndex(int index) {
+        if (timeline == null || timeline.isEmpty()) {
+            return 0;
+        }
+
+        int safeIndex = Math.max(0, Math.min(index, timeline.size() - 1));
+        Integer eventTick = asInt(timeline.get(safeIndex).get("tick"));
+        return eventTick != null ? eventTick : safeIndex;
+    }
+
+    private int findTimelineIndexAfterRecordedTick(int targetRecordedTick) {
+        int low = 0;
+        int high = timeline.size() - 1;
+        int result = timeline.size();
+
+        while (low <= high) {
+            int mid = (low + high) >>> 1;
+            int midTick = getRecordedTickAtIndex(mid);
+
+            if (midTick > targetRecordedTick) {
+                result = mid;
+                high = mid - 1;
+            } else {
+                low = mid + 1;
+            }
+        }
+
+        return Math.max(0, Math.min(result, timeline.size()));
+    }
+
+    private void applyReplayBlockChangesInRange(int fromIndex, int toIndexExclusive) {
+        int start = Math.max(0, Math.min(fromIndex, timeline.size()));
+        int end = Math.max(start, Math.min(toIndexExclusive, timeline.size()));
+
+        for (int i = start; i < end; i++) {
+            Map<String, Object> event = timeline.get(i);
+            String type = asString(event.get("type"));
+            if ("block_place".equals(type) || "block_break".equals(type)) {
+                applyReplayBlockChange(event, type, true);
+            } else if ("block_break_stage".equals(type)) {
+                showGlobalBlockBreakStage(event);
+            }
+        }
+    }
+
+    private void rebuildReplayBlockStateUntil(int targetIndexExclusive) {
+        clearAllVisibleBreakStages();
+        computeAndApplyBlockStateAtIndex(targetIndexExclusive);
     }
 
     @EventHandler(priority = EventPriority.HIGH)
