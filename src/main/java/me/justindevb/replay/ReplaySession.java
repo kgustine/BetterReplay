@@ -1173,14 +1173,25 @@ public class ReplaySession implements Listener, PacketListener {
 
     @Override
     public void onPacketReceive(PacketReceiveEvent event) {
-        if (!event.getPacketType().equals(PacketType.Play.Client.INTERACT_ENTITY))
-            return;
-
         if (!event.getPlayer().equals(viewer))
             return;
 
-        WrapperPlayClientInteractEntity wrapper = new WrapperPlayClientInteractEntity(event);
+        // Suppress USE_ITEM / BLOCK_PLACEMENT packets that follow an entity click
+        // so that playback controls don't activate when clicking on a recorded entity.
+        // Both packets arrive on the same netty thread as INTERACT_ENTITY, so the
+        // timestamp set below is guaranteed to be visible here (no cross-thread race).
+        if (event.getPacketType().equals(PacketType.Play.Client.PLAYER_BLOCK_PLACEMENT)
+                || event.getPacketType().equals(PacketType.Play.Client.USE_ITEM)) {
+            if (System.nanoTime() - lastEntityInteractNanos < 100_000_000L) {
+                event.setCancelled(true);
+            }
+            return;
+        }
 
+        if (!event.getPacketType().equals(PacketType.Play.Client.INTERACT_ENTITY))
+            return;
+
+        WrapperPlayClientInteractEntity wrapper = new WrapperPlayClientInteractEntity(event);
 
         if (trackedEntityIds.contains(wrapper.getEntityId())) {
             lastEntityInteractNanos = System.nanoTime();
