@@ -115,13 +115,19 @@ public class RecordedPlayer extends RecordedEntity {
     }
 
     public void updateInventory(Map<String, Object> snapshot) {
-        this.currentInventory = snapshot;
+        if (snapshot.containsKey("mainHand"))
+            currentInventory.put("mainHand", snapshot.get("mainHand"));
+        if (snapshot.containsKey("offHand"))
+            currentInventory.put("offHand", snapshot.get("offHand"));
+        if (snapshot.containsKey("armor"))
+            currentInventory.put("armor", snapshot.get("armor"));
+        if (snapshot.containsKey("contents"))
+            currentInventory.put("contents", snapshot.get("contents"));
 
         if (!spawned)
             return;
 
         showInventorySnapshot(currentInventory);
-
     }
 
 
@@ -309,9 +315,6 @@ public class RecordedPlayer extends RecordedEntity {
             inv.setItem(37, deserializeItem(armor.get(1))); // leggings
             inv.setItem(36, deserializeItem(armor.get(0))); // boots
         }
-
-        inv.setItem(40, deserializeItem(currentInventory.get("offHand")));
-
 
         inv.setItem(40, deserializeItem(currentInventory.get("offHand")));
 

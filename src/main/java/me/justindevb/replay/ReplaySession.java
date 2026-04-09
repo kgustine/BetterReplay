@@ -850,17 +850,15 @@ public class ReplaySession implements Listener, PacketListener {
 
 
     private Map<String, Object> getInventorySnapshotForPlayer(UUID uuid) {
-        if (timeline.isEmpty()) return null;
-        Map<String, Object> firstEvent = timeline.get(0);
+        String uuidStr = uuid.toString();
+        for (Map<String, Object> event : timeline) {
+            if (!"inventory_update".equals(event.get("type"))) continue;
+            if (!uuidStr.equals(event.get("uuid"))) continue;
 
-        if (!uuid.toString().equals(firstEvent.get("uuid")))
-            return null;
-
-        Object inventoryObj = firstEvent.get("inventory");
-        if (inventoryObj instanceof Map<?, ?> map) {
-            @SuppressWarnings("unchecked")
-            Map<String, Object> inventory = (Map<String, Object>) map;
-            return inventory;
+            // Return the event directly — inventory fields are at the top level
+            if (event.containsKey("mainHand") || event.containsKey("contents")) {
+                return event;
+            }
         }
         return null;
     }

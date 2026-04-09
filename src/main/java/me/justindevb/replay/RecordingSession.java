@@ -363,12 +363,7 @@ public class RecordingSession implements Listener, PacketListener {
         event.put("tick", tick);
         event.put("type", "inventory_update");
         event.put("uuid", uuid.toString());
-
-        ItemStack mainHand = p.getInventory().getItem(e.getNewSlot());
-        ItemStack offHand = p.getInventory().getItemInOffHand();
-
-        event.put("mainHand", serializeItem(mainHand));
-        event.put("offHand", serializeItem(offHand));
+        event.putAll(captureInventory(p));
 
         timeline.add(event);
     }
@@ -534,13 +529,6 @@ public class RecordingSession implements Listener, PacketListener {
         }
         invSnapshot.put("contents", contents);
 
-        Map<String, Object> event = new HashMap<>();
-        event.put("tick", tick);
-        event.put("type", "inventory_update");
-        event.put("uuid", p.getUniqueId().toString());
-        event.put("inventory", invSnapshot);
-
-        timeline.add(event);
         return invSnapshot;
     }
 
