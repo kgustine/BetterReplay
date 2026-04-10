@@ -32,11 +32,7 @@ public class ReplayCommand implements CommandExecutor, TabCompleter {
         }
 
         if (args.length == 0) {
-            p.sendMessage("/replay start <name> <player> [durationSeconds]");
-            p.sendMessage("/replay stop <name>");
-            p.sendMessage("/replay play <name>");
-            p.sendMessage("/replay delete <name>");
-            p.sendMessage("/replay list");
+            sendHelp(p);
             return true;
         }
 
@@ -222,9 +218,31 @@ public class ReplayCommand implements CommandExecutor, TabCompleter {
                         });
                         return true;
             }
-            default -> sender.sendMessage("Unknown command");
+            default -> {
+                p.sendMessage("§cUnknown subcommand: §f" + args[0]);
+                sendHelp(p);
+            }
         }
         return true;
+    }
+
+    private void sendHelp(Player p) {
+        p.sendMessage("§6§lBetterReplay Commands:");
+        if (p.hasPermission("replay.start"))
+            p.sendMessage("§e/replay start <name> <player1 player2 ...> [seconds] §7- Start recording");
+        if (p.hasPermission("replay.stop")) {
+            p.sendMessage("§e/replay stop <name> §7- Stop an active recording");
+            var sessions = manager.getActiveSessions();
+            if (!sessions.isEmpty()) {
+                p.sendMessage("§7  Active: §f" + String.join("§7, §f", sessions.keySet()));
+            }
+        }
+        if (p.hasPermission("replay.play"))
+            p.sendMessage("§e/replay play <name> §7- Play a saved replay");
+        if (p.hasPermission("replay.list"))
+            p.sendMessage("§e/replay list [page] §7- List saved replays");
+        if (p.hasPermission("replay.delete"))
+            p.sendMessage("§e/replay delete <name> §7- Delete a saved replay");
     }
 
     @Override
@@ -233,10 +251,11 @@ public class ReplayCommand implements CommandExecutor, TabCompleter {
         if (args.length == 1) {
             List<String> completions = new ArrayList<>();
 
-            if (sender.hasPermission("replay.list")) completions.add("list");
-            if (sender.hasPermission("replay.delete")) completions.add("delete");
-            if (sender.hasPermission("replay.play")) completions.add("play");
             if (sender.hasPermission("replay.start")) completions.add("start");
+            if (sender.hasPermission("replay.stop")) completions.add("stop");
+            if (sender.hasPermission("replay.play")) completions.add("play");
+            if (sender.hasPermission("replay.delete")) completions.add("delete");
+            if (sender.hasPermission("replay.list")) completions.add("list");
 
             return completions.stream()
                     .filter(s -> s.startsWith(args[0].toLowerCase()))
@@ -253,9 +272,13 @@ public class ReplayCommand implements CommandExecutor, TabCompleter {
 
             String prefix = joinArgs(args, 1).toLowerCase();
 
-            return cachedReplays.stream()
+            List<String> matches = cachedReplays.stream()
                     .filter(name -> name.toLowerCase().startsWith(prefix))
                     .toList();
+            if (matches.isEmpty() && args.length == 2) {
+                return List.of("<name>");
+            }
+            return matches;
         }
 
         if (args.length >= 2 && args[0].equalsIgnoreCase("stop")) {
@@ -264,28 +287,63 @@ public class ReplayCommand implements CommandExecutor, TabCompleter {
 
             String prefix = joinArgs(args, 1).toLowerCase();
 
-            return Replay.getInstance()
+            List<String> matches = Replay.getInstance()
                     .getRecorderManager()
                     .getActiveSessions()
                     .keySet()
                     .stream()
                     .filter(name -> name.toLowerCase().startsWith(prefix))
                     .toList();
+            if (matches.isEmpty() && args.length == 2) {
+                return List.of("<name>");
+            }
+            return matches;
         }
 
 
         if (args.length == 2 && args[0].equalsIgnoreCase("start")) {
-            return Collections.emptyList();
+            if (!sender.hasPermission("replay.start"))
+                return Collections.emptyList();
+            return List.of("<name>");
         }
 
         if (args.length == 3 && args[0].equalsIgnoreCase("start")) {
             if (!sender.hasPermission("replay.start"))
                 return Collections.emptyList();
 
+            // First player slot — only suggest player names, no duration yet
+            String currentArg = args[2].toLowerCase();
+
             return Bukkit.getOnlinePlayers().stream()
                     .map(Player::getName)
-                    .filter(name -> name.toLowerCase().startsWith(args[2].toLowerCase()))
+                    .filter(name -> name.toLowerCase().startsWith(currentArg))
                     .toList();
+        }
+
+        if (args.length >= 4 && args[0].equalsIgnoreCase("start")) {
+            if (!sender.hasPermission("replay.start"))
+                return Collections.emptyList();
+
+            // Collect already-selected player names so we don't suggest them again
+            java.util.Set<String> alreadySelected = new java.util.HashSet<>();
+            for (int i = 2; i < args.length - 1; i++) {
+                alreadySelected.add(args[i].toLowerCase());
+            }
+
+            String currentArg = args[args.length - 1].toLowerCase();
+
+            List<String> suggestions = Bukkit.getOnlinePlayers().stream()
+                    .map(Player::getName)
+                    .filter(name -> !alreadySelected.contains(name.toLowerCase()))
+                    .filter(name -> name.toLowerCase().startsWith(currentArg))
+                    .collect(java.util.stream.Collectors.toCollection(ArrayList::new));
+
+            // Show duration hint now that at least one player is selected
+            if (currentArg.isEmpty() || "[seconds]".startsWith(currentArg)) {
+                suggestions.add("[seconds]");
+            }
+
+            return suggestions;
         }
 
         return Collections.emptyList();
