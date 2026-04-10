@@ -3,7 +3,7 @@ package me.justindevb.replay;
 import com.github.retrooper.packetevents.PacketEvents;
 import com.github.retrooper.packetevents.event.PacketListenerPriority;
 import com.tcoded.folialib.FoliaLib;
-import io.github.retrooper.packetevents.bstats.bukkit.Metrics;
+import org.bstats.bukkit.Metrics;
 import io.github.retrooper.packetevents.factory.spigot.SpigotPacketEventsBuilder;
 import me.justindevb.replay.api.ReplayAPI;
 import me.justindevb.replay.listeners.PacketEventsListener;
@@ -161,7 +161,7 @@ public class Replay extends JavaPlugin {
 
     public void initBstats() {
         int pluginId = 29341;
-        Metrics metrics = new Metrics(this, pluginId);
+        new Metrics(this, pluginId);
     }
 
     public FoliaLib getFoliaLib() {
