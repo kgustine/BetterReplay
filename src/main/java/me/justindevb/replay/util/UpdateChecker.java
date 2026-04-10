@@ -5,6 +5,7 @@ import org.bukkit.plugin.java.JavaPlugin;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.net.URI;
 import java.net.URL;
 import java.util.Scanner;
 import java.util.function.Consumer;
@@ -21,8 +22,8 @@ public class UpdateChecker {
 
     public void getVersion(final Consumer<String> consumer) {
         Replay.getInstance().getFoliaLib().getScheduler().runAsync(task -> {
-            try (InputStream inputStream = new URL(
-                    "https://api.spigotmc.org/legacy/update.php?resource=" + this.resourceId).openStream();
+            try (InputStream inputStream = URI.create(
+                    "https://api.spigotmc.org/legacy/update.php?resource=" + this.resourceId).toURL().openStream();
                  Scanner scanner = new Scanner(inputStream)) {
                 if (scanner.hasNext()) {
                     consumer.accept(scanner.next());

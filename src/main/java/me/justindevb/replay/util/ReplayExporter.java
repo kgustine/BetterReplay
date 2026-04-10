@@ -73,11 +73,11 @@ public class ReplayExporter {
                 Object textures = ev.get("textures");
                 if (textures instanceof List) {
                     List<Map<String,String>> skinProps = new ArrayList<>();
-                    for (Object o : (List)textures) {
-                        if (o instanceof Map) {
-                            Map m = (Map)o;
+                    for (Object o : (List<?>)textures) {
+                        if (o instanceof Map<?,?> m) {
                             Map<String,String> prop = new HashMap<>();
-                            prop.put("name", String.valueOf(m.getOrDefault("name","textures")));
+                            Object nameVal = m.get("name");
+                            prop.put("name", nameVal != null ? String.valueOf(nameVal) : "textures");
                             prop.put("value", String.valueOf(m.get("value")));
                             if (m.get("signature") != null) prop.put("signature", String.valueOf(m.get("signature")));
                             skinProps.add(prop);

@@ -9,6 +9,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.util.Base64;
 
+@SuppressWarnings("deprecation") // BukkitObjectOutputStream/InputStream deprecated but changing format would break existing replay files
 public final class ItemStackSerializer {
     private ItemStackSerializer() {}
 

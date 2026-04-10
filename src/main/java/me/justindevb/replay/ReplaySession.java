@@ -19,6 +19,7 @@ import com.github.retrooper.packetevents.util.Vector3i;
 import me.justindevb.replay.api.events.ReplayStartEvent;
 import me.justindevb.replay.api.events.ReplayStopEvent;
 import net.kyori.adventure.text.Component;
+import net.kyori.adventure.text.TextComponent;
 import net.kyori.adventure.text.format.NamedTextColor;
 import org.bukkit.*;
 import org.bukkit.entity.Player;
@@ -364,7 +365,7 @@ public class ReplaySession implements Listener, PacketListener {
                 }
             }
             case "item_drop" -> {
-              //  Map<String, Object> itemMap = (Map<String, Object>) event.get("item");
+                @SuppressWarnings("unchecked")
                 Map<String, Object> locMap = (Map<String, Object>) event.get("location");
 
                // ItemStack stack = deserializeItem(itemMap);
@@ -816,27 +817,27 @@ public class ReplaySession implements Listener, PacketListener {
 
         ItemStack pauseButton = new ItemStack(Material.RED_DYE);
         ItemMeta pauseMeta = pauseButton.getItemMeta();
-        pauseMeta.setDisplayName("§cPause / Play");
+        pauseMeta.displayName(Component.text("Pause / Play", NamedTextColor.RED));
         pauseButton.setItemMeta(pauseMeta);
 
         ItemStack skipForward = new ItemStack(Material.LIME_DYE);
         ItemMeta forwardMeta = skipForward.getItemMeta();
-        forwardMeta.setDisplayName("§a+5 seconds");
+        forwardMeta.displayName(Component.text("+5 seconds", NamedTextColor.GREEN));
         skipForward.setItemMeta(forwardMeta);
 
         ItemStack skipBackward = new ItemStack(Material.YELLOW_DYE);
         ItemMeta backwardMeta = skipBackward.getItemMeta();
-        backwardMeta.setDisplayName("§e-5 seconds");
+        backwardMeta.displayName(Component.text("-5 seconds", NamedTextColor.YELLOW));
         skipBackward.setItemMeta(backwardMeta);
 
         ItemStack stopReplay = new ItemStack(Material.BARRIER);
         ItemMeta stopMeta = stopReplay.getItemMeta();
-        stopMeta.setDisplayName("§4Exit Replay");
+        stopMeta.displayName(Component.text("Exit Replay", NamedTextColor.DARK_RED));
         stopReplay.setItemMeta(stopMeta);
 
         ItemStack playerMenu = new ItemStack(Material.PLAYER_HEAD);
         ItemMeta menuMeta = playerMenu.getItemMeta();
-        menuMeta.setDisplayName("§bPlayers");
+        menuMeta.displayName(Component.text("Players", NamedTextColor.AQUA));
         playerMenu.setItemMeta(menuMeta);
 
         viewer.getInventory().setItem(4, pauseButton);
@@ -874,7 +875,8 @@ public class ReplaySession implements Listener, PacketListener {
         if (handItem == null || !handItem.hasItemMeta())
             return;
 
-        String name = handItem.getItemMeta().getDisplayName();
+        Component displayName = handItem.getItemMeta().displayName();
+        String name = displayName instanceof TextComponent tc ? tc.content() : "";
 
         // If the player is looking at a recorded player, open their inventory
         // instead of activating the hotbar control. Works at extended range (20 blocks).
@@ -886,11 +888,11 @@ public class ReplaySession implements Listener, PacketListener {
         }
 
         switch (name) {
-            case "§cPause / Play" -> togglePause();
-            case "§a+5 seconds" -> skipSeconds(5);
-            case "§e-5 seconds" -> skipSeconds(-5);
-            case "§4Exit Replay" -> stop();
-            case "§bPlayers" -> openPlayerMenu();
+            case "Pause / Play" -> togglePause();
+            case "+5 seconds" -> skipSeconds(5);
+            case "-5 seconds" -> skipSeconds(-5);
+            case "Exit Replay" -> stop();
+            case "Players" -> openPlayerMenu();
         }
 
         e.setCancelled(true);
@@ -1099,7 +1101,8 @@ public class ReplaySession implements Listener, PacketListener {
 
     @EventHandler
     public void onPlayerMenuClick(InventoryClickEvent e) {
-        if (!e.getView().getTitle().equals("§8Recorded Players"))
+        Component title = e.getView().title();
+        if (!(title instanceof TextComponent tc) || !tc.content().equals("Recorded Players"))
             return;
 
         e.setCancelled(true);
@@ -1136,7 +1139,8 @@ public class ReplaySession implements Listener, PacketListener {
             return;
         if (!isActive())
             return;
-        if (!e.getView().getTitle().contains("'s Inventory"))
+        Component dragTitle = e.getView().title();
+        if (!(dragTitle instanceof TextComponent dtc) || !dtc.content().contains("'s Inventory"))
             return;
 
         e.setCancelled(true);
@@ -1156,8 +1160,9 @@ public class ReplaySession implements Listener, PacketListener {
         if (item == null || !item.hasItemMeta())
             return;
 
-        String name = item.getItemMeta().getDisplayName();
-        if (name.equals("§cPause / Play") || name.equals("§a+5 seconds") || name.equals("§e-5 seconds")) {
+        Component dropDisplayName = item.getItemMeta().displayName();
+        String dropName = dropDisplayName instanceof TextComponent tc ? tc.content() : "";
+        if (dropName.equals("Pause / Play") || dropName.equals("+5 seconds") || dropName.equals("-5 seconds")) {
             e.setCancelled(true);
         }
     }
@@ -1287,11 +1292,11 @@ public class ReplaySession implements Listener, PacketListener {
         null
         );
 
+        @SuppressWarnings("unchecked")
+        EntityData itemData = new EntityData(8, EntityDataTypes.ITEMSTACK, nmsStack);
         WrapperPlayServerEntityMetadata meta = new WrapperPlayServerEntityMetadata(
                 entityId,
-                Collections.singletonList(
-                        new EntityData(8, EntityDataTypes.ITEMSTACK, nmsStack)
-                )
+                Collections.singletonList(itemData)
         );
 
         PacketEvents.getAPI().getPlayerManager().sendPacket(viewer, spawn);
@@ -1302,7 +1307,7 @@ public class ReplaySession implements Listener, PacketListener {
         Inventory inv = Bukkit.createInventory(
                 null,
                 27,
-                "§8Recorded Players"
+                Component.text("Recorded Players", NamedTextColor.DARK_GRAY)
         );
 
         for (RecordedEntity entity : recordedEntities.values()) {
@@ -1312,7 +1317,7 @@ public class ReplaySession implements Listener, PacketListener {
             ItemStack head = new ItemStack(Material.PLAYER_HEAD);
             SkullMeta meta = (SkullMeta) head.getItemMeta();
             meta.setOwningPlayer(Bukkit.getOfflinePlayer(rp.getUuid()));
-            meta.setDisplayName("§e" + rp.getName());
+            meta.displayName(Component.text(rp.getName(), NamedTextColor.YELLOW));
             head.setItemMeta(meta);
 
             inv.addItem(head);
