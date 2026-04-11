@@ -1,5 +1,6 @@
 package me.justindevb.replay;
 
+import com.tcoded.folialib.FoliaLib;
 import com.tcoded.folialib.wrapper.task.WrappedTask;
 import me.justindevb.replay.api.events.RecordingStartEvent;
 import me.justindevb.replay.api.events.RecordingStopEvent;
@@ -42,7 +43,9 @@ public class RecorderManager {
 
         session.stop(save);
 
-        Bukkit.getPluginManager().callEvent(new RecordingStopEvent(session));
+        replay.getFoliaLib().getScheduler().runNextTick(task -> {
+            Bukkit.getPluginManager().callEvent(new RecordingStopEvent(session));
+        });
 
         if (activeSessions.isEmpty() && tickTask != null) {
             tickTask.cancel();
