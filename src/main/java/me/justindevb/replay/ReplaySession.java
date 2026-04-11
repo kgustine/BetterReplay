@@ -1214,11 +1214,16 @@ public class ReplaySession implements Listener, PacketListener {
 
     /**
      * Return the RecordedPlayer the viewer is aiming at, or null if none.
-     * Works up to 20 blocks away — much farther than Minecraft's native interaction range.
+     * Uses AABB ray-box intersection against the player hitbox (0.6 wide × 1.8 tall).
      */
     private RecordedPlayer getTargetedRecordedPlayer(Player player) {
         Location eye = player.getEyeLocation();
+        org.bukkit.util.Vector origin = eye.toVector();
         org.bukkit.util.Vector dir = eye.getDirection().normalize();
+
+        // Player hitbox half-widths (width 0.6 → half 0.3, height 1.8)
+        final double halfW = 0.3;
+        final double height = 1.8;
 
         RecordedPlayer closest = null;
         double closestDist = Double.MAX_VALUE;
@@ -1230,22 +1235,66 @@ public class ReplaySession implements Listener, PacketListener {
             if (loc == null || !eye.getWorld().equals(loc.getWorld()))
                 continue;
 
-            // Aim at entity center (approx 0.9 blocks above feet)
-            org.bukkit.util.Vector toEntity = loc.toVector()
-                    .add(new org.bukkit.util.Vector(0, 0.9, 0))
-                    .subtract(eye.toVector());
+            double dx = loc.getX() - origin.getX();
+            double dy = loc.getY() - origin.getY();
+            double dz = loc.getZ() - origin.getZ();
+            if (dx * dx + dy * dy + dz * dz > 400.0) continue; // > 20 blocks
 
-            double distance = toEntity.length();
-            if (distance > 20.0) continue;
+            // AABB min/max relative to ray origin
+            double minX = loc.getX() - halfW - origin.getX();
+            double maxX = loc.getX() + halfW - origin.getX();
+            double minY = loc.getY() - origin.getY();
+            double maxY = loc.getY() + height - origin.getY();
+            double minZ = loc.getZ() - halfW - origin.getZ();
+            double maxZ = loc.getZ() + halfW - origin.getZ();
 
-            double dot = toEntity.dot(dir);
-            if (dot < 0) continue;
+            double tMin = Double.NEGATIVE_INFINITY;
+            double tMax = Double.POSITIVE_INFINITY;
 
-            // Perpendicular distance squared from the look ray
-            double perpDistSq = toEntity.crossProduct(dir).lengthSquared();
-            if (perpDistSq < 1.0 && distance < closestDist) {
+            // X slab
+            if (Math.abs(dir.getX()) < 1e-9) {
+                if (minX > 0 || maxX < 0) continue;
+            } else {
+                double invD = 1.0 / dir.getX();
+                double t1 = minX * invD;
+                double t2 = maxX * invD;
+                if (t1 > t2) { double tmp = t1; t1 = t2; t2 = tmp; }
+                tMin = Math.max(tMin, t1);
+                tMax = Math.min(tMax, t2);
+                if (tMin > tMax) continue;
+            }
+
+            // Y slab
+            if (Math.abs(dir.getY()) < 1e-9) {
+                if (minY > 0 || maxY < 0) continue;
+            } else {
+                double invD = 1.0 / dir.getY();
+                double t1 = minY * invD;
+                double t2 = maxY * invD;
+                if (t1 > t2) { double tmp = t1; t1 = t2; t2 = tmp; }
+                tMin = Math.max(tMin, t1);
+                tMax = Math.min(tMax, t2);
+                if (tMin > tMax) continue;
+            }
+
+            // Z slab
+            if (Math.abs(dir.getZ()) < 1e-9) {
+                if (minZ > 0 || maxZ < 0) continue;
+            } else {
+                double invD = 1.0 / dir.getZ();
+                double t1 = minZ * invD;
+                double t2 = maxZ * invD;
+                if (t1 > t2) { double tmp = t1; t1 = t2; t2 = tmp; }
+                tMin = Math.max(tMin, t1);
+                tMax = Math.min(tMax, t2);
+                if (tMin > tMax) continue;
+            }
+
+            if (tMax < 0) continue; // box is entirely behind
+            double hitDist = tMin >= 0 ? tMin : tMax;
+            if (hitDist < closestDist) {
                 closest = rp;
-                closestDist = distance;
+                closestDist = hitDist;
             }
         }
         return closest;
