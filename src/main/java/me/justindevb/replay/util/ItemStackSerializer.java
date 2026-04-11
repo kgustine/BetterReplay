@@ -2,38 +2,44 @@ package me.justindevb.replay.util;
 
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.util.io.BukkitObjectInputStream;
-import org.bukkit.util.io.BukkitObjectOutputStream;
 
 import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.util.Base64;
 
-@SuppressWarnings("deprecation") // BukkitObjectOutputStream/InputStream deprecated but changing format would break existing replay files
 public final class ItemStackSerializer {
     private ItemStackSerializer() {}
 
+    /**
+     * Serialize an ItemStack to a Base64 string using the modern Paper API.
+     */
     public static String serializeItem(ItemStack item) {
         if (item == null) return null;
-
-        try (
-                ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
-                BukkitObjectOutputStream dataOutput = new BukkitObjectOutputStream(outputStream)
-        ) {
-            dataOutput.writeObject(item);
-            dataOutput.flush();
-            return Base64.getEncoder().encodeToString(outputStream.toByteArray());
-        } catch (IOException e) {
-            e.printStackTrace();
-            return null;
-        }
+        return Base64.getEncoder().encodeToString(item.serializeAsBytes());
     }
 
+    /**
+     * Deserialize an ItemStack from a Base64 string.
+     * Automatically detects and handles legacy BukkitObjectOutputStream format
+     * (used in recordings created before this change).
+     */
     public static ItemStack deserializeItem(Object obj) {
         if (!(obj instanceof String data) || data.isEmpty()) return null;
 
+        byte[] bytes = Base64.getDecoder().decode(data);
+
+        // Legacy format detection: Java ObjectOutputStream writes magic bytes 0xAC 0xED
+        if (bytes.length >= 2 && bytes[0] == (byte) 0xAC && bytes[1] == (byte) 0xED) {
+            return deserializeLegacy(bytes);
+        }
+
+        return ItemStack.deserializeBytes(bytes);
+    }
+
+    @SuppressWarnings("deprecation")
+    private static ItemStack deserializeLegacy(byte[] bytes) {
         try (
-                ByteArrayInputStream inputStream = new ByteArrayInputStream(Base64.getDecoder().decode(data));
+                ByteArrayInputStream inputStream = new ByteArrayInputStream(bytes);
                 BukkitObjectInputStream dataInput = new BukkitObjectInputStream(inputStream)
         ) {
             Object read = dataInput.readObject();
