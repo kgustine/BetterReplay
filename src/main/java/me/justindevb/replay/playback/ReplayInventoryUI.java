@@ -222,6 +222,9 @@ public class ReplayInventoryUI implements Listener {
         if (!player.equals(this.viewer))
             return;
 
+        if (!sessionControl.isActive())
+            return;
+
         ItemStack handItem = e.getItem();
         if (handItem == null || !handItem.hasItemMeta())
             return;

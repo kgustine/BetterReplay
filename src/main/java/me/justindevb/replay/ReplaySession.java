@@ -46,6 +46,7 @@ public class ReplaySession implements Listener, PacketListener {
     private final Map<UUID, RecordedEntity> recordedEntities = new HashMap<>();
     private int tick = 0;
     private boolean paused = false;
+    private boolean stopped = false;
 
     // Delegates
     private final ReplayBlockManager blockManager;
@@ -208,26 +209,32 @@ public class ReplaySession implements Listener, PacketListener {
     }
 
     public void stop() {
-        viewer.sendActionBar(Component.empty());
+        if (stopped) return;
+        stopped = true;
 
-        Bukkit.getPluginManager().callEvent(new ReplayStopEvent(viewer, this));
-        recordedEntities.values().forEach(RecordedEntity::destroy);
-        recordedEntities.clear();
+        try {
+            viewer.sendActionBar(Component.empty());
 
-        clearFakeItems();
-        blockManager.incrementEpoch();
-        blockManager.clearAllVisibleBreakStages();
-        blockManager.restoreSessionBaseline();
-        inventoryUI.restoreInventory();
-        if (replayTask != null) {
-            replay.getFoliaLib().getScheduler().cancelTask(replayTask);
-            replayTask = null;
+            Bukkit.getPluginManager().callEvent(new ReplayStopEvent(viewer, this));
+            recordedEntities.values().forEach(RecordedEntity::destroy);
+            recordedEntities.clear();
+
+            clearFakeItems();
+            blockManager.incrementEpoch();
+            blockManager.clearAllVisibleBreakStages();
+            blockManager.restoreSessionBaseline();
+            inventoryUI.restoreInventory();
+            if (replayTask != null) {
+                replay.getFoliaLib().getScheduler().cancelTask(replayTask);
+                replayTask = null;
+            }
+
+            viewer.sendMessage("Replay finished");
+        } finally {
+            ReplayRegistry.remove(this);
+            HandlerList.unregisterAll(this);
+            HandlerList.unregisterAll(inventoryUI);
         }
-
-        viewer.sendMessage("Replay finished");
-        ReplayRegistry.remove(this);
-        HandlerList.unregisterAll(this);
-        HandlerList.unregisterAll(inventoryUI);
     }
 
     // -- Skip / Seek --
