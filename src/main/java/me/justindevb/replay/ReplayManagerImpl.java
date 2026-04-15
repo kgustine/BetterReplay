@@ -1,8 +1,8 @@
 package me.justindevb.replay;
 
 import me.justindevb.replay.api.ReplayManager;
+import me.justindevb.replay.storage.ReplayStorage;
 import me.justindevb.replay.util.VersionUtil;
-import me.justindevb.replay.util.storage.ReplayStorage;
 import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
 

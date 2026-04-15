@@ -1,9 +1,9 @@
-package me.justindevb.replay.util.storage;
+package me.justindevb.replay.storage;
 
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import me.justindevb.replay.Replay;
-import me.justindevb.replay.util.ReplayCompressor;
+import me.justindevb.replay.util.io.ReplayCompressor;
 import me.justindevb.replay.util.VersionUtil;
 
 import java.io.*;
