@@ -4,6 +4,7 @@ import com.github.retrooper.packetevents.PacketEvents;
 import com.github.retrooper.packetevents.wrapper.play.server.WrapperPlayServerEntityHeadLook;
 import com.github.retrooper.packetevents.wrapper.play.server.WrapperPlayServerEntityTeleport;
 import io.github.retrooper.packetevents.util.SpigotConversionUtil;
+import me.justindevb.replay.Replay;
 import me.justindevb.replay.util.EntityTypeMapper;
 import me.justindevb.replay.util.spawning.SpawnFakeMob;
 import org.bukkit.Location;

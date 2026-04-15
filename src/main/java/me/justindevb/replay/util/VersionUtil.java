@@ -2,6 +2,7 @@ package me.justindevb.replay.util;
 
 import com.google.gson.*;
 
+import java.lang.reflect.Type;
 import java.util.List;
 
 public final class VersionUtil {
@@ -56,12 +57,13 @@ public final class VersionUtil {
      *
      * @throws ReplayVersionMismatchException if the recording requires a newer plugin version
      */
-    public static List<?> parseReplayJson(Gson gson, String json, String runningVersion) {
+    @SuppressWarnings("unchecked")
+    public static <T> List<T> parseReplayJson(Gson gson, String json, String runningVersion, Type listType) {
         JsonElement el = JsonParser.parseString(json);
 
         if (el.isJsonArray()) {
             // Legacy format: raw timeline array, no version check possible
-            return gson.fromJson(el, List.class);
+            return gson.fromJson(el, listType);
         }
 
         JsonObject obj = el.getAsJsonObject();
@@ -71,7 +73,7 @@ public final class VersionUtil {
                 throw new ReplayVersionMismatchException(required, runningVersion);
             }
         }
-        return gson.fromJson(obj.get("timeline"), List.class);
+        return gson.fromJson(obj.get("timeline"), listType);
     }
 
     /**
