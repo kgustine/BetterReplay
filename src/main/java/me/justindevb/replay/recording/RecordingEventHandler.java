@@ -165,6 +165,32 @@ public class RecordingEventHandler implements Listener {
     }
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onItemSwapHands(PlayerSwapHandItemsEvent e) {
+        Player p = e.getPlayer();
+        if (!tracker.isTrackedPlayer(p.getUniqueId())) return;
+
+        builder.addEvent(new TimelineEvent.HeldItemChange(
+                tickProvider.getTick(),
+                p.getUniqueId().toString(),
+                serializeItem(e.getOffHandItem()),
+                serializeItem(e.getMainHandItem())
+        ));
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void onItemHeld(PlayerItemHeldEvent e) {
+        Player p = e.getPlayer();
+        if (!tracker.isTrackedPlayer(p.getUniqueId())) return;
+
+        builder.addEvent(new TimelineEvent.HeldItemChange(
+                tickProvider.getTick(),
+                p.getUniqueId().toString(),
+                serializeItem(p.getInventory().getItem(e.getNewSlot())),
+                serializeItem(p.getInventory().getItemInOffHand())
+        ));
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onEntityDamaged(EntityDamageEvent e) {
         if (!tracker.isTrackedPlayer(e.getEntity().getUniqueId())) return;
 

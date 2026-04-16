@@ -97,6 +97,9 @@ public class PlaybackEngine {
             case TimelineEvent.InventoryUpdate e -> {
                 if (entity instanceof RecordedPlayer rp) rp.updateInventory(e);
             }
+            case TimelineEvent.HeldItemChange e -> {
+                if (entity instanceof RecordedPlayer rp) rp.updateHeldItems(e);
+            }
             case TimelineEvent.ItemDrop e -> {
                 ItemStack stack = deserializeItem(e.item());
                 Location loc = (e.locWorld() != null)

@@ -35,6 +35,8 @@ public sealed interface TimelineEvent {
     record InventoryUpdate(int tick, String uuid, String mainHand, String offHand,
                            List<String> armor, List<String> contents) implements TimelineEvent {}
 
+    record HeldItemChange(int tick, String uuid, String mainHand, String offHand) implements TimelineEvent {}
+
     // ── Blocks ────────────────────────────────────────────────
 
     record BlockBreak(int tick, String uuid, String world, int x, int y, int z,

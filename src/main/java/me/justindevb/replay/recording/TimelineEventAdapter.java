@@ -78,6 +78,13 @@ public class TimelineEventAdapter implements JsonSerializer<TimelineEvent>, Json
                 json.add("armor", ctx.serialize(e.armor()));
                 json.add("contents", ctx.serialize(e.contents()));
             }
+            case TimelineEvent.HeldItemChange e -> {
+                json.addProperty("tick", e.tick());
+                json.addProperty("type", "held_item_change");
+                json.addProperty("uuid", e.uuid());
+                json.addProperty("mainHand", e.mainHand());
+                json.addProperty("offHand", e.offHand());
+            }
             case TimelineEvent.BlockBreak e -> {
                 json.addProperty("tick", e.tick());
                 json.addProperty("type", "block_break");
@@ -231,6 +238,11 @@ public class TimelineEventAdapter implements JsonSerializer<TimelineEvent>, Json
                     optString(obj, "offHand"),
                     readStringList(obj, "armor"),
                     readStringList(obj, "contents")
+            );
+            case "held_item_change" -> new TimelineEvent.HeldItemChange(
+                    tick, uuid,
+                    optString(obj, "mainHand"),
+                    optString(obj, "offHand")
             );
             case "block_break" -> new TimelineEvent.BlockBreak(
                     tick, uuid,

@@ -127,6 +127,40 @@ public class RecordedPlayer extends RecordedEntity {
         showInventorySnapshot(currentInventory);
     }
 
+    public void updateHeldItems(TimelineEvent.HeldItemChange change) {
+        if (!spawned) return;
+
+        List<Equipment> packets = new ArrayList<>();
+        boolean changed = false;
+
+        ItemStack mainHand = deserializeItem(change.mainHand());
+        if (!areItemsEqual(mainHand, lastMainHand)) {
+            lastMainHand = mainHand != null ? mainHand.clone() : new ItemStack(Material.AIR);
+            changed = true;
+        }
+
+        ItemStack offHand = deserializeItem(change.offHand());
+        if (!areItemsEqual(offHand, lastOffHand)) {
+            lastOffHand = offHand != null ? offHand.clone() : new ItemStack(Material.AIR);
+            changed = true;
+        }
+
+        if (!changed) return;
+
+        packets.add(new Equipment(
+                EquipmentSlot.MAIN_HAND,
+                SpigotConversionUtil.fromBukkitItemStack(lastMainHand)
+        ));
+        packets.add(new Equipment(
+                EquipmentSlot.OFF_HAND,
+                SpigotConversionUtil.fromBukkitItemStack(lastOffHand)
+        ));
+
+        WrapperPlayServerEntityEquipment packet =
+                new WrapperPlayServerEntityEquipment(fakeEntityId, packets);
+        PacketEvents.getAPI().getPlayerManager().sendPacket(viewer, packet);
+    }
+
 
 
     // ---------------------
