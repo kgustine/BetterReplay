@@ -28,6 +28,7 @@ import java.io.File;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.logging.Logger;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
@@ -239,6 +240,7 @@ class RecordingSessionIntegrationTest {
             replayStatic.when(Replay::getInstance).thenReturn(plugin);
             when(plugin.getReplayStorage()).thenReturn(storage);
             when(plugin.getReplayCache()).thenReturn(replayCache);
+            when(plugin.getLogger()).thenReturn(Logger.getLogger("BetterReplay-Test"));
 
             PacketEventsAPI<?> api = mock(PacketEventsAPI.class);
             EventManager eventManager = mock(EventManager.class);

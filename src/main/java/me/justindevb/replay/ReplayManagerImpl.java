@@ -40,7 +40,7 @@ public class ReplayManagerImpl implements ReplayManager {
             }
 
             storage.listReplays().thenAccept(names ->
-                    Replay.getInstance().getReplayCache().setReplays(names)
+                    replay.getReplayCache().setReplays(names)
             ).exceptionally(ex -> {
                 ex.printStackTrace();
                 return null;
@@ -145,7 +145,7 @@ public class ReplayManagerImpl implements ReplayManager {
         return storage.deleteReplay(name)
                 .thenCompose(deleted -> storage.listReplays()
                         .thenApply(names -> {
-                            Replay.getInstance().getReplayCache().setReplays(names);
+                            replay.getReplayCache().setReplays(names);
                             return deleted;
                         }))
                 .exceptionally(ex -> {
