@@ -45,7 +45,6 @@ class RecordingSessionIntegrationTest {
     @Mock private ReplayCache replayCache;
 
     private UUID playerUuid;
-    private RecordingSession session;
 
     @BeforeEach
     void setUp() {

@@ -3,6 +3,7 @@ package me.justindevb.replay.recording;
 import org.bukkit.Location;
 import org.bukkit.World;
 import org.bukkit.block.Block;
+import org.bukkit.block.BlockFace;
 import org.bukkit.block.BlockState;
 import org.bukkit.block.data.BlockData;
 import org.bukkit.entity.Entity;
@@ -19,8 +20,8 @@ import org.bukkit.event.entity.EntityDeathEvent;
 import org.bukkit.event.entity.EntitySpawnEvent;
 import org.bukkit.event.entity.PlayerDeathEvent;
 import org.bukkit.event.player.*;
+import org.bukkit.inventory.EquipmentSlot;
 import org.bukkit.inventory.ItemStack;
-import org.bukkit.inventory.PlayerInventory;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -30,7 +31,6 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
 
-import java.util.List;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -121,7 +121,7 @@ class RecordingEventHandlerTest {
 
         Block block = mockBlock("world", 5, 60, 8, null);
         ItemStack tool = mock(ItemStack.class);
-        BlockDamageEvent event = new BlockDamageEvent(p, block, tool, false);
+        BlockDamageEvent event = new BlockDamageEvent(p, block, BlockFace.UP, tool, false);
         handler.onBlockDamage(event);
 
         assertEquals(1, builder.getTimeline().size());
@@ -142,7 +142,7 @@ class RecordingEventHandlerTest {
         when(replacedState.getBlockData()).thenReturn(replacedBlockData);
         when(replacedBlockData.getAsString()).thenReturn("minecraft:air");
 
-        BlockPlaceEvent event = new BlockPlaceEvent(block, replacedState, block, mock(ItemStack.class), p, true);
+        BlockPlaceEvent event = new BlockPlaceEvent(block, replacedState, block, mock(ItemStack.class), p, true, EquipmentSlot.HAND);
         handler.onBlockPlace(event);
 
         assertEquals(1, builder.getTimeline().size());
@@ -237,7 +237,6 @@ class RecordingEventHandlerTest {
         @Test
         void onAttack_nonPlayerDamager_ignored() {
             Entity damager = mock(Entity.class);
-            Entity target = mock(Entity.class);
 
             EntityDamageByEntityEvent event = mock(EntityDamageByEntityEvent.class);
             when(event.getDamager()).thenReturn(damager);

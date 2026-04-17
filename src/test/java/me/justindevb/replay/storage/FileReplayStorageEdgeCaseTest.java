@@ -2,9 +2,8 @@ package me.justindevb.replay.storage;
 
 import me.justindevb.replay.Replay;
 import me.justindevb.replay.recording.TimelineEvent;
-import me.justindevb.replay.util.io.ReplayCompressor;
 import org.bukkit.configuration.file.FileConfiguration;
-import org.bukkit.plugin.PluginDescriptionFile;
+import io.papermc.paper.plugin.configuration.PluginMeta;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -12,7 +11,6 @@ import org.junit.jupiter.api.io.TempDir;
 
 import java.io.File;
 import java.io.FileWriter;
-import java.io.IOException;
 import java.nio.file.Files;
 import java.util.List;
 import java.util.concurrent.ExecutionException;
@@ -39,9 +37,9 @@ class FileReplayStorageEdgeCaseTest {
         when(config.getBoolean("General.Compress-Replays", true)).thenReturn(true);
         when(replay.getConfig()).thenReturn(config);
 
-        PluginDescriptionFile desc = mock(PluginDescriptionFile.class);
-        when(desc.getVersion()).thenReturn("1.4.0");
-        when(replay.getDescription()).thenReturn(desc);
+        PluginMeta meta = mock(PluginMeta.class);
+        when(meta.getVersion()).thenReturn("1.4.0");
+        when(replay.getPluginMeta()).thenReturn(meta);
 
         storage = new FileReplayStorage(replay);
     }

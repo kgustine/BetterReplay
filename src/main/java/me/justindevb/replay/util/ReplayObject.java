@@ -37,7 +37,6 @@ public class ReplayObject {
     }
 
     /** Loads the timeline from storage and updates this object */
-    @SuppressWarnings("unchecked")
     public CompletableFuture<Void> load() {
         return storage.loadReplay(name)
                 .thenAccept(loaded -> {

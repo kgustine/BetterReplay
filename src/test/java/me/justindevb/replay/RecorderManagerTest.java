@@ -104,7 +104,7 @@ class RecorderManagerTest {
 
         WrappedTask mockTask = mock(WrappedTask.class);
         when(scheduler.runTimer(any(Runnable.class), anyLong(), anyLong())).thenReturn(mockTask);
-        when(scheduler.runNextTick(any(java.util.function.Consumer.class))).thenReturn(CompletableFuture.completedFuture(null));
+        when(scheduler.runNextTick(any())).thenReturn(CompletableFuture.completedFuture(null));
 
         manager.startSession("stop-test", List.of(p), -1);
         boolean stopped = manager.stopSession("stop-test", false);

@@ -1,13 +1,9 @@
 package me.justindevb.replay.storage;
 
-import com.google.gson.Gson;
-import com.google.gson.GsonBuilder;
-import com.google.gson.reflect.TypeToken;
 import me.justindevb.replay.Replay;
 import me.justindevb.replay.recording.TimelineEvent;
-import me.justindevb.replay.recording.TimelineEventAdapter;
 import org.bukkit.configuration.file.FileConfiguration;
-import org.bukkit.plugin.PluginDescriptionFile;
+import io.papermc.paper.plugin.configuration.PluginMeta;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -20,7 +16,6 @@ import org.mockito.quality.Strictness;
 
 import java.io.File;
 import java.io.IOException;
-import java.lang.reflect.Type;
 import java.nio.file.Files;
 import java.util.List;
 import java.util.concurrent.ExecutionException;
@@ -34,7 +29,7 @@ class FileReplayStorageTest {
 
     @Mock private Replay plugin;
     @Mock private FileConfiguration config;
-    @Mock private PluginDescriptionFile descriptionFile;
+    @Mock private PluginMeta pluginMeta;
 
     @TempDir
     File tempDir;
@@ -45,8 +40,8 @@ class FileReplayStorageTest {
     void setUp() {
         when(plugin.getDataFolder()).thenReturn(tempDir);
         when(plugin.getConfig()).thenReturn(config);
-        when(plugin.getDescription()).thenReturn(descriptionFile);
-        when(descriptionFile.getVersion()).thenReturn("1.4.0");
+        when(plugin.getPluginMeta()).thenReturn(pluginMeta);
+        when(pluginMeta.getVersion()).thenReturn("1.4.0");
         storage = new FileReplayStorage(plugin);
     }
 

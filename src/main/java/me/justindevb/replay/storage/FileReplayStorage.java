@@ -58,7 +58,7 @@ public class FileReplayStorage implements ReplayStorage {
     public CompletableFuture<Void> saveReplay(String name, List<TimelineEvent> timeline) {
         return CompletableFuture.runAsync(() -> {
             try {
-                String json = VersionUtil.wrapTimeline(gson, timeline, replay.getDescription().getVersion());
+                String json = VersionUtil.wrapTimeline(gson, timeline, replay.getPluginMeta().getVersion());
                 if (isCompressionEnabled()) {
                     File file = new File(replayFolder, name + EXT_COMPRESSED);
                     Files.write(file.toPath(), ReplayCompressor.compress(json));
@@ -90,7 +90,7 @@ public class FileReplayStorage implements ReplayStorage {
                 byte[] bytes = Files.readAllBytes(file.toPath());
                 // Auto-detect: works for both compressed and plain-text files
                 String json = ReplayCompressor.decompressIfNeeded(bytes);
-                return VersionUtil.parseReplayJson(gson, json, replay.getDescription().getVersion(), TIMELINE_LIST_TYPE);
+                return VersionUtil.parseReplayJson(gson, json, replay.getPluginMeta().getVersion(), TIMELINE_LIST_TYPE);
             } catch (IOException e) {
                 throw new RuntimeException("Failed to load replay " + name, e);
             }

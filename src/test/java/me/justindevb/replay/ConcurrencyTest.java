@@ -4,7 +4,6 @@ import me.justindevb.replay.recording.TimelineBuilder;
 import me.justindevb.replay.recording.TimelineEvent;
 import me.justindevb.replay.util.ReplayCache;
 import org.junit.jupiter.api.RepeatedTest;
-import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
 import java.util.Collections;

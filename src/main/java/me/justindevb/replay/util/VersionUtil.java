@@ -57,7 +57,6 @@ public final class VersionUtil {
      *
      * @throws ReplayVersionMismatchException if the recording requires a newer plugin version
      */
-    @SuppressWarnings("unchecked")
     public static <T> List<T> parseReplayJson(Gson gson, String json, String runningVersion, Type listType) {
         JsonElement el = JsonParser.parseString(json);
 
