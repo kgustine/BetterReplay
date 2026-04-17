@@ -62,6 +62,16 @@ public class ReplayInventoryUI implements Listener {
         viewer.getInventory().clear();
     }
 
+    /**
+     * Transfers the saved (original) inventory from another session's inventory UI,
+     * so that the original items are preserved across nested replay sessions.
+     */
+    public void transferSavedInventory(ReplayInventoryUI other) {
+        this.viewerInventory = other.viewerInventory;
+        this.viewerArmor = other.viewerArmor;
+        this.viewerOffHand = other.viewerOffHand;
+    }
+
     public void restoreInventory() {
         viewer.getInventory().clear();
         viewer.getInventory().setContents(viewerInventory);

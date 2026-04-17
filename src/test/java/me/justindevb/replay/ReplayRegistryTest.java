@@ -1,6 +1,7 @@
 package me.justindevb.replay;
 
 import me.justindevb.replay.entity.RecordedEntity;
+import org.bukkit.entity.Player;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -60,7 +61,9 @@ class ReplayRegistryTest {
     @Test
     void getEntityById_findsAcrossSessions() {
         RecordedEntity entity = mock(RecordedEntity.class);
-        when(session1.getRecordedEntity(42)).thenReturn(null);
+        // Use lenient() because ConcurrentHashMap iteration order is non-deterministic;
+        // session2 may be checked first, making session1's stub unused.
+        lenient().when(session1.getRecordedEntity(42)).thenReturn(null);
         when(session2.getRecordedEntity(42)).thenReturn(entity);
 
         ReplayRegistry.add(session1);
@@ -101,5 +104,32 @@ class ReplayRegistryTest {
 
         assertTrue(latch.await(10, TimeUnit.SECONDS));
         executor.shutdownNow();
+    }
+
+    @Test
+    void getSessionForViewer_returnsMatchingSession() {
+        Player viewer = mock(Player.class);
+        when(session1.getViewer()).thenReturn(viewer);
+
+        ReplayRegistry.add(session1);
+
+        assertSame(session1, ReplayRegistry.getSessionForViewer(viewer));
+    }
+
+    @Test
+    void getSessionForViewer_returnsNullWhenNoMatch() {
+        Player viewer1 = mock(Player.class);
+        Player viewer2 = mock(Player.class);
+        when(session1.getViewer()).thenReturn(viewer1);
+
+        ReplayRegistry.add(session1);
+
+        assertNull(ReplayRegistry.getSessionForViewer(viewer2));
+    }
+
+    @Test
+    void getSessionForViewer_returnsNullWhenEmpty() {
+        Player viewer = mock(Player.class);
+        assertNull(ReplayRegistry.getSessionForViewer(viewer));
     }
 }

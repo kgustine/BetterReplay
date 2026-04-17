@@ -1,6 +1,7 @@
 package me.justindevb.replay;
 
 import me.justindevb.replay.entity.RecordedEntity;
+import org.bukkit.entity.Player;
 
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -30,5 +31,17 @@ public class ReplayRegistry {
 
     public static Set<ReplaySession> getActiveSessions() {
         return activeSessions;
+    }
+
+    /**
+     * Returns the first active session for the given viewer, or null if none.
+     */
+    public static ReplaySession getSessionForViewer(Player viewer) {
+        for (ReplaySession session : activeSessions) {
+            if (session.getViewer().equals(viewer)) {
+                return session;
+            }
+        }
+        return null;
     }
 }

@@ -77,9 +77,14 @@ public class ReplaySession implements Listener, PacketListener {
             return;
         }
 
+        ReplaySession existingSession = ReplayRegistry.getSessionForViewer(viewer);
         ReplayRegistry.add(this);
         timeline = blockManager.enrichBlockBreakStageTimeline(timeline);
-        inventoryUI.copyInventory();
+        if (existingSession != null) {
+            inventoryUI.transferSavedInventory(existingSession.getInventoryUI());
+        } else {
+            inventoryUI.copyInventory();
+        }
 
         TimelineEvent firstLocationEvent = timeline.stream()
                 .filter(e -> e instanceof TimelineEvent.PlayerMove || e instanceof TimelineEvent.EntityMove
@@ -494,5 +499,9 @@ public class ReplaySession implements Listener, PacketListener {
 
     public Player getViewer() {
         return viewer;
+    }
+
+    public ReplayInventoryUI getInventoryUI() {
+        return inventoryUI;
     }
 }
