@@ -61,8 +61,16 @@ public class ReplaySession implements Listener, PacketListener {
         this.blockManager = new ReplayBlockManager(viewer, replay);
         this.playbackEngine = new PlaybackEngine(viewer, replay, trackedEntityIds, deadEntities, recordedEntities, blockManager);
         this.inventoryUI = new ReplayInventoryUI(viewer, () -> recordedEntities, new ReplayInventoryUI.SessionControl() {
-            @Override public void togglePause() { paused = !paused; }
+            @Override public void togglePause() {
+                paused = !paused;
+                if (paused) {
+                    inventoryUI.showStepControls();
+                } else {
+                    inventoryUI.hideStepControls();
+                }
+            }
             @Override public void skipSeconds(int seconds) { ReplaySession.this.skipSeconds(seconds); }
+            @Override public void stepTick(int direction) { ReplaySession.this.stepTick(direction); }
             @Override public void stop() { ReplaySession.this.stop(); }
             @Override public boolean isActive() { return ReplaySession.this.isActive(); }
         });
@@ -256,14 +264,48 @@ public class ReplaySession implements Listener, PacketListener {
         if (targetRecordedTick > maxRecordedTick) targetRecordedTick = maxRecordedTick;
 
         int targetIndex = findTimelineIndexAfterRecordedTick(targetRecordedTick);
+        seekToIndex(targetIndex);
+    }
 
-        if (targetIndex != currentIndex) {
-            blockManager.incrementEpoch();
+    private void stepTick(int direction) {
+        if (timeline == null || timeline.isEmpty()) return;
+
+        int currentIndex = Math.max(0, Math.min(tick, timeline.size()));
+
+        if (direction > 0) {
+            // Step forward: advance past the next recorded tick group
+            if (currentIndex >= timeline.size()) return;
+            int recordedTick = timeline.get(currentIndex).tick();
+            int targetIndex = findTimelineIndexAfterRecordedTick(recordedTick);
+            seekToIndex(targetIndex);
+        } else {
+            // Step backward: go to the start of the previous recorded tick group
+            if (currentIndex <= 0) return;
+            int currentRecordedTick = getRecordedTickAtIndex(currentIndex - 1);
+            // Find start of current tick group
+            int startOfCurrentGroup = findTimelineIndexAfterRecordedTick(currentRecordedTick - 1);
+            if (startOfCurrentGroup <= 0) {
+                seekToIndex(0);
+                return;
+            }
+            // Previous group's recorded tick
+            int prevRecordedTick = timeline.get(startOfCurrentGroup - 1).tick();
+            int targetIndex = findTimelineIndexAfterRecordedTick(prevRecordedTick - 1);
+            seekToIndex(targetIndex);
         }
+    }
+
+    private void seekToIndex(int targetIndex) {
+        int currentIndex = Math.max(0, Math.min(tick, timeline.size()));
+        targetIndex = Math.max(0, Math.min(targetIndex, timeline.size()));
+
+        if (targetIndex == currentIndex) return;
+
+        blockManager.incrementEpoch();
 
         if (targetIndex > currentIndex) {
             blockManager.applyReplayBlockChangesInRange(currentIndex, targetIndex, timeline);
-        } else if (targetIndex < currentIndex) {
+        } else {
             blockManager.rebuildReplayBlockStateUntil(targetIndex, timeline);
         }
 

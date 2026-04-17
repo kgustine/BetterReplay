@@ -30,6 +30,7 @@ class ReplayInventoryUITest {
     private final ReplayInventoryUI.SessionControl noOpControl = new ReplayInventoryUI.SessionControl() {
         @Override public void togglePause() {}
         @Override public void skipSeconds(int seconds) {}
+        @Override public void stepTick(int direction) {}
         @Override public void stop() {}
         @Override public boolean isActive() { return true; }
     };
