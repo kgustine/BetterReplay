@@ -7,10 +7,11 @@ import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
 
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 
 public class RecorderManager {
     private final Replay replay;
-    private final Map<String, RecordingSession> activeSessions = new HashMap<>();
+    private final ConcurrentHashMap<String, RecordingSession> activeSessions = new ConcurrentHashMap<>();
     private WrappedTask tickTask;
 
     public RecorderManager(Replay replay) {
