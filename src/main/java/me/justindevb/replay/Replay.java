@@ -119,12 +119,16 @@ public class Replay extends JavaPlugin {
     private void checkForUpdate() {
         if (!getConfig().getBoolean("General.Check-Update"))
             return;
-        new UpdateChecker(this, 133445).getVersion(version -> {
-            String localVersion = this.getPluginMeta().getVersion().replace("-SNAPSHOT", "");
-            if (localVersion.equals(version))
+
+        String currentVersion = getPluginMeta().getVersion();
+        new UpdateChecker(this, "betterreplay").checkForUpdate(currentVersion, result -> {
+            if (result.updateAvailable()) {
+                String suffix = "release".equals(result.versionType()) ? "" : " (" + result.versionType() + ")";
+                getLogger().log(Level.INFO, "Update available: v" + result.latestVersion() + suffix
+                        + " — https://modrinth.com/plugin/betterreplay");
+            } else {
                 getLogger().log(Level.INFO, "You are up to date!");
-            else
-                getLogger().log(Level.INFO, "There is an update available! Download at: https://www.spigotmc.org/resources/betterreplay.133445/");
+            }
         });
     }
 

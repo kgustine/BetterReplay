@@ -1,7 +1,8 @@
 name: Build
 
 on:
-- push
+  push:
+  pull_request:
 
 jobs:
   build:
@@ -9,16 +10,40 @@ jobs:
     steps:
       - name: Checkout git repo
         uses: actions/checkout@v4
+
       - name: Set up Java
         uses: actions/setup-java@v4
         with:
           java-version: 21
           distribution: 'temurin'
+
+      - name: Set alpha version for dev builds
+        if: github.ref == 'refs/heads/dev'
+        run: |
+          BASE=$(mvn help:evaluate -Dexpression=project.version -q -DforceStdout)
+          mvn versions:set -DnewVersion="${BASE}-alpha.${GITHUB_RUN_NUMBER}" -DgenerateBackupPoms=false
+
       - name: Build
         run: mvn install
 
-      - uses: actions/upload-artifact@v4
-        name: Upload Artifact
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
         with:
           name: BetterReplay
           path: target/*.jar
+
+      - name: Publish to Modrinth
+        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev'
+        uses: Kir-Antipov/mc-publish@v3.3
+        with:
+          modrinth-id: ${{ secrets.MODRINTH_PROJECT_ID }}
+          modrinth-token: ${{ secrets.MODRINTH_TOKEN }}
+          files: target/BetterReplay-*.jar
+          version-type: ${{ github.ref == 'refs/heads/main' && 'release' || 'alpha' }}
+          loaders: |
+            paper
+            folia
+          game-versions: |
+            1.21.11
+          dependencies: |
+            packetevents(required)

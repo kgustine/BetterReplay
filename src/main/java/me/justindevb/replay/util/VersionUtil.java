@@ -28,6 +28,61 @@ public final class VersionUtil {
         return true;
     }
 
+    /**
+     * Compares two version strings with alpha-build support.
+     * <p>
+     * Ordering examples: {@code 1.3.0 < 1.4.0-alpha.1 < 1.4.0-alpha.5 < 1.4.0}
+     *
+     * @return negative if {@code a} is older than {@code b}, 0 if equal, positive if {@code a} is newer
+     */
+    public static int compareVersions(String a, String b) {
+        String baseA = a.split("-")[0];
+        String baseB = b.split("-")[0];
+
+        int baseCmp = compareBase(baseA, baseB);
+        if (baseCmp != 0) return baseCmp;
+
+        // Same base – compare pre-release status
+        boolean alphaA = a.contains("-alpha");
+        boolean alphaB = b.contains("-alpha");
+
+        if (!alphaA && !alphaB) return 0;      // both releases
+        if (alphaA && !alphaB)  return -1;     // alpha < release
+        if (!alphaA)            return 1;      // release > alpha
+
+        // Both alpha with same base – compare build numbers
+        return Integer.compare(extractAlphaBuild(a), extractAlphaBuild(b));
+    }
+
+    /**
+     * Returns true if the given version string denotes an alpha/dev build.
+     */
+    public static boolean isAlpha(String version) {
+        return version.contains("-alpha");
+    }
+
+    private static int compareBase(String a, String b) {
+        String[] sa = a.split("\\.");
+        String[] sb = b.split("\\.");
+        int len = Math.max(sa.length, sb.length);
+        for (int i = 0; i < len; i++) {
+            int va = i < sa.length ? parseSegment(sa[i]) : 0;
+            int vb = i < sb.length ? parseSegment(sb[i]) : 0;
+            if (va != vb) return Integer.compare(va, vb);
+        }
+        return 0;
+    }
+
+    private static int extractAlphaBuild(String version) {
+        int idx = version.indexOf("-alpha.");
+        if (idx < 0) return 0;
+        try {
+            return Integer.parseInt(version.substring(idx + 7));
+        } catch (NumberFormatException e) {
+            return 0;
+        }
+    }
+
     private static int parseSegment(String s) {
         // Strip non-numeric suffixes like "-SNAPSHOT"
         int end = 0;
