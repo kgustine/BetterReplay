@@ -26,6 +26,10 @@ jobs:
       - name: Build
         run: mvn install
 
+      - name: Resolve version
+        id: version
+        run: echo "VERSION=$(mvn help:evaluate -Dexpression=project.version -q -DforceStdout)" >> $GITHUB_OUTPUT
+
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
@@ -39,6 +43,7 @@ jobs:
           modrinth-id: ${{ secrets.MODRINTH_PROJECT_ID }}
           modrinth-token: ${{ secrets.MODRINTH_TOKEN }}
           files: target/BetterReplay-*.jar
+          version: ${{ steps.version.outputs.VERSION }}
           version-type: ${{ github.ref == 'refs/heads/main' && 'release' || 'alpha' }}
           loaders: |
             paper
