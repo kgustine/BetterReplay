@@ -13,6 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Comprehensive test suite (251 tests across 5 phases)
 - Sealed `TimelineEvent` records replacing raw `Map<String, Object>` for type-safe timeline events
 - Source organization plan executed (Tier 1 + Tier 2 package restructure)
+- Enum-based config settings model with centralized, typed config keys (pending merge in #36)
+- Versioned config migration with one-time comment backfill for legacy config files (pending merge in #36)
 
 ### Fixed
 - `activeSessions` in `RecorderManager` changed to `ConcurrentHashMap` to prevent `ConcurrentModificationException` (#33)
@@ -20,12 +22,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Replay controls getting stuck after replay ends (#27)
 - Static `Replay.getInstance()` NPEs in test environments (#32)
 - Deprecation warnings and unused imports cleaned up
+- Config migration comment placement and header ordering for generated configs (pending merge in #36)
 
 ### Changed
 - All commands routed through `ReplayManager` API (#25)
 - `RecordingStopEvent` now fires synchronously to fix async AntiCheatReplay compatibility
 - All `printStackTrace()` calls replaced with proper logger calls
 - CI actions bumped to v4 for Node.js 24 compatibility
+- Config settings ownership moved out of `Replay` into a dedicated comment-preserving config manager (pending merge in #36)
 
 ## [1.4.0] - 2026-04-10
 
