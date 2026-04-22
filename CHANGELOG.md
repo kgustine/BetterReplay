@@ -23,6 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Static `Replay.getInstance()` NPEs in test environments (#32)
 - Deprecation warnings and unused imports cleaned up
 - Config migration comment placement and header ordering for generated configs (pending merge in #36)
+- Wrapped YAML pseudo-comment values now load correctly during idempotent config initialization (prevents parse failure on long comment lines)
 
 ### Changed
 - All commands routed through `ReplayManager` API (#25)

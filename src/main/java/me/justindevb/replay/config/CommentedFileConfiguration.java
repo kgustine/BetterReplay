@@ -2,12 +2,11 @@ package me.justindevb.replay.config;
 
 import org.bukkit.configuration.file.YamlConfiguration;
 import org.bukkit.plugin.Plugin;
+import org.bukkit.configuration.InvalidConfigurationException;
 
 import java.io.BufferedWriter;
 import java.io.File;
 import java.io.IOException;
-import java.io.Reader;
-import java.io.StringReader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.ArrayList;
@@ -51,10 +50,12 @@ public class CommentedFileConfiguration {
 
         this.commentIndex = countCommentLines(lines);
         String transformed = transformCommentsToKeys(lines);
-        try (Reader reader = new StringReader(transformed)) {
-            this.yaml = YamlConfiguration.loadConfiguration(reader);
-        } catch (IOException e) {
-            throw new RuntimeException("Failed to load config content", e);
+        try {
+            YamlConfiguration loaded = new YamlConfiguration();
+            loaded.loadFromString(transformed);
+            this.yaml = loaded;
+        } catch (InvalidConfigurationException e) {
+            throw new RuntimeException("Failed to parse config content", e);
         }
     }
 
@@ -169,7 +170,8 @@ public class CommentedFileConfiguration {
         List<String> restored = new ArrayList<>(lines.length);
         String markerPrefix = plugin.getName() + COMMENT_MARKER;
 
-        for (String line : lines) {
+        for (int i = 0; i < lines.length; i++) {
+            String line = lines[i];
             String trimmed = line.trim();
             if (!trimmed.startsWith(markerPrefix)) {
                 restored.add(line);
@@ -184,8 +186,15 @@ public class CommentedFileConfiguration {
             }
 
             String value = line.substring(colon + 1).trim();
+
             if (value.startsWith("'")) {
                 value = value.substring(1);
+
+                // SnakeYAML may wrap long single-quoted values onto continuation lines.
+                while (!value.endsWith("'") && i + 1 < lines.length) {
+                    i++;
+                    value += " " + lines[i].trim();
+                }
             }
             if (value.endsWith("'")) {
                 value = value.substring(0, value.length() - 1);
