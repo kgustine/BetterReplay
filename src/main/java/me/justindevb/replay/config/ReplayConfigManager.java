@@ -51,6 +51,11 @@ public class ReplayConfigManager {
             }
         }
 
+        double configuredMaxSpeed = commented.getDouble(ReplayConfigSetting.PLAYBACK_MAX_SPEED.getKey(), 1.0D);
+        if (configuredMaxSpeed < 1.0D) {
+            changed |= commented.setIfDifferent(ReplayConfigSetting.PLAYBACK_MAX_SPEED.getKey(), 1.0D);
+        }
+
         changed |= commented.setIfDifferent(ReplayConfigSetting.CONFIG_VERSION.getKey(), CURRENT_CONFIG_VERSION);
 
         if (changed) {

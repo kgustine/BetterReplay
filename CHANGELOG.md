@@ -32,6 +32,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - All `printStackTrace()` calls replaced with proper logger calls
 - CI actions bumped to v4 for Node.js 24 compatibility
 - Config settings ownership moved out of `Replay` into a dedicated comment-preserving config manager (pending merge in #36)
+- Replay sessions now always start at `1.0x` speed; `Playback.Max-Speed` is enforced to a minimum of `1.0`
 
 ## [1.4.0] - 2026-04-10
 

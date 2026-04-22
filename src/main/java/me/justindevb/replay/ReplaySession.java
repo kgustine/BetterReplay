@@ -63,8 +63,8 @@ public class ReplaySession implements Listener, PacketListener {
         this.replay = replay;
 
         this.speedStep = replay.getConfig().getDouble("Playback.Speed-Step", 0.2);
-        this.maxSpeed = replay.getConfig().getDouble("Playback.Max-Speed", 1.0);
-        this.playbackSpeed = maxSpeed;
+        this.maxSpeed = Math.max(1.0D, replay.getConfig().getDouble("Playback.Max-Speed", 1.0D));
+        this.playbackSpeed = 1.0D;
 
         this.blockManager = new ReplayBlockManager(viewer, replay);
         this.playbackEngine = new PlaybackEngine(viewer, replay, trackedEntityIds, deadEntities, recordedEntities, blockManager);

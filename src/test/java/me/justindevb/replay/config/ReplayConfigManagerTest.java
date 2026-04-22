@@ -90,6 +90,23 @@ class ReplayConfigManagerTest {
         assertTrue(migrated.indexOf("Config-Version: 2") < migrated.indexOf("General:"));
     }
 
+    @Test
+    void initialize_clampsPlaybackMaxSpeed_toAtLeastOne() throws IOException {
+        Path configFile = tempDir.resolve("config.yml");
+        Files.writeString(configFile, """
+                Playback:
+                  Max-Speed: 0.5
+                """, StandardCharsets.UTF_8);
+
+        when(plugin.getDataFolder()).thenReturn(tempDir.toFile());
+        when(plugin.getName()).thenReturn("BetterReplay");
+
+        new ReplayConfigManager(plugin).initialize();
+
+        String migrated = Files.readString(configFile, StandardCharsets.UTF_8);
+        assertTrue(migrated.contains("Max-Speed: 1.0"));
+    }
+
     private int occurrencesOf(String haystack, String needle) {
         int count = 0;
         int index = 0;
