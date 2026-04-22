@@ -158,6 +158,10 @@ manager.startReplay("demo-session", viewerPlayer);
 
 For full documentation of every method, all events, and a complete example plugin, see the **[API Documentation](docs/API.md)**.
 
+## Changelog
+
+A full history of changes, additions, and fixes is tracked in **[CHANGELOG.md](CHANGELOG.md)**, following the [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format.
+
 ## Development workflow
 
 Typical contribution flow:
