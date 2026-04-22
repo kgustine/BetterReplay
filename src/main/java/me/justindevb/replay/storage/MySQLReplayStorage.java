@@ -4,6 +4,7 @@ import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.reflect.TypeToken;
 import me.justindevb.replay.Replay;
+import me.justindevb.replay.config.ReplayConfigSetting;
 import me.justindevb.replay.recording.TimelineEvent;
 import me.justindevb.replay.recording.TimelineEventAdapter;
 import me.justindevb.replay.util.io.ReplayCompressor;
@@ -35,7 +36,7 @@ public class MySQLReplayStorage implements ReplayStorage {
 
     /** Returns true when the plugin config has compression enabled (default: true). */
     private boolean isCompressionEnabled() {
-        return replay.getConfig().getBoolean("General.Compress-Replays", true);
+        return ReplayConfigSetting.COMPRESS_REPLAYS.getBoolean(replay.getConfig());
     }
 
     private void init() {

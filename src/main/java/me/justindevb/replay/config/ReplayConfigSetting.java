@@ -1,0 +1,60 @@
+package me.justindevb.replay.config;
+
+import org.bukkit.configuration.file.FileConfiguration;
+
+public enum ReplayConfigSetting {
+    CONFIG_VERSION("Config-Version", 2,
+            "Internal config migration version. Do not edit unless instructed."),
+    CHECK_UPDATE("General.Check-Update", true,
+            "Check for plugin updates on startup."),
+    COMPRESS_REPLAYS("General.Compress-Replays", true,
+            "GZIP compress replay data to save disk space."),
+    STORAGE_TYPE("General.Storage-Type", "file",
+            "Storage backend to use: file or mysql."),
+    MYSQL_HOST("General.MySQL.host", "host",
+            "MySQL host name or IP address."),
+    MYSQL_PORT("General.MySQL.port", 3306,
+            "MySQL port."),
+    MYSQL_DATABASE("General.MySQL.database", "database",
+            "MySQL database/schema name."),
+    MYSQL_USER("General.MySQL.user", "username",
+            "MySQL username."),
+    MYSQL_PASSWORD("General.MySQL.password", "password",
+            "MySQL password."),
+    LIST_PAGE_SIZE("list-page-size", 10,
+            "Number of replay names shown per /replay list page.");
+
+    private final String key;
+    private final Object defaultValue;
+    private final String[] comments;
+
+    ReplayConfigSetting(String key, Object defaultValue, String... comments) {
+        this.key = key;
+        this.defaultValue = defaultValue;
+        this.comments = comments != null ? comments : new String[0];
+    }
+
+    public String getKey() {
+        return key;
+    }
+
+    public Object getDefaultValue() {
+        return defaultValue;
+    }
+
+    public String[] getComments() {
+        return comments;
+    }
+
+    public String getString(FileConfiguration config) {
+        return config.getString(this.key, (String) this.defaultValue);
+    }
+
+    public boolean getBoolean(FileConfiguration config) {
+        return config.getBoolean(this.key, (boolean) this.defaultValue);
+    }
+
+    public int getInt(FileConfiguration config) {
+        return config.getInt(this.key, (int) this.defaultValue);
+    }
+}

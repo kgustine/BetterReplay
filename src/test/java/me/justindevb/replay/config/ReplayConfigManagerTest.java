@@ -1,0 +1,102 @@
+package me.justindevb.replay.config;
+
+import me.justindevb.replay.Replay;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.api.io.TempDir;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+
+@ExtendWith(MockitoExtension.class)
+class ReplayConfigManagerTest {
+
+    @Mock private Replay plugin;
+
+    @TempDir Path tempDir;
+
+    @Test
+    void initialize_migratesLegacyCommentlessConfig_andSetsVersion() throws IOException {
+        Path configFile = tempDir.resolve("config.yml");
+        Files.writeString(configFile, """
+                General:
+                  Check-Update: true
+                  Compress-Replays: true
+                  Storage-Type: file
+                  MySQL:
+                    host: host
+                    port: 3306
+                    database: database
+                    user: username
+                    password: password
+                list-page-size: 10
+                """, StandardCharsets.UTF_8);
+
+        when(plugin.getDataFolder()).thenReturn(tempDir.toFile());
+        when(plugin.getName()).thenReturn("BetterReplay");
+
+        new ReplayConfigManager(plugin).initialize();
+
+        String migrated = Files.readString(configFile, StandardCharsets.UTF_8);
+        assertTrue(migrated.startsWith("# ==========================================="));
+        assertTrue(migrated.contains("# Internal config migration version. Do not edit unless instructed."));
+        assertTrue(migrated.contains("Config-Version: 2"));
+        assertTrue(migrated.contains("# Check for plugin updates on startup."));
+        assertTrue(migrated.contains("# Number of replay names shown per /replay list page."));
+        assertTrue(migrated.indexOf("# MySQL host name or IP address.") < migrated.indexOf("host:"));
+        assertTrue(migrated.indexOf("# Check for plugin updates on startup.") < migrated.indexOf("Check-Update:"));
+
+        verify(plugin).reloadConfig();
+    }
+
+    @Test
+    void initialize_isIdempotent_afterMigration() throws IOException {
+        Path configFile = tempDir.resolve("config.yml");
+        Files.writeString(configFile, """
+                General:
+                  Check-Update: true
+                  Compress-Replays: true
+                  Storage-Type: file
+                  MySQL:
+                    host: host
+                    port: 3306
+                    database: database
+                    user: username
+                    password: password
+                list-page-size: 10
+                """, StandardCharsets.UTF_8);
+
+        when(plugin.getDataFolder()).thenReturn(tempDir.toFile());
+        when(plugin.getName()).thenReturn("BetterReplay");
+
+        ReplayConfigManager manager = new ReplayConfigManager(plugin);
+        manager.initialize();
+        manager.initialize();
+
+        String migrated = Files.readString(configFile, StandardCharsets.UTF_8);
+        String checkUpdateComment = "# Check for plugin updates on startup.";
+        assertEquals(1, occurrencesOf(migrated, checkUpdateComment));
+    }
+
+    private int occurrencesOf(String haystack, String needle) {
+        int count = 0;
+        int index = 0;
+        while (true) {
+            index = haystack.indexOf(needle, index);
+            if (index < 0) {
+                return count;
+            }
+            count++;
+            index += needle.length();
+        }
+    }
+}

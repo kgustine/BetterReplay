@@ -6,6 +6,8 @@ import com.tcoded.folialib.FoliaLib;
 import org.bstats.bukkit.Metrics;
 import io.github.retrooper.packetevents.factory.spigot.SpigotPacketEventsBuilder;
 import me.justindevb.replay.api.ReplayAPI;
+import me.justindevb.replay.config.ReplayConfigManager;
+import me.justindevb.replay.config.ReplayConfigSetting;
 import me.justindevb.replay.listeners.PacketEventsListener;
 import me.justindevb.replay.util.ReplayCache;
 import me.justindevb.replay.util.UpdateChecker;
@@ -17,6 +19,7 @@ import org.bukkit.command.PluginCommand;
 import org.bukkit.configuration.file.FileConfiguration;
 import org.bukkit.plugin.java.JavaPlugin;
 
+import java.util.Locale;
 import java.util.logging.Level;
 
 public class Replay extends JavaPlugin {
@@ -98,26 +101,11 @@ public class Replay extends JavaPlugin {
     }
 
     private void initConfig() {
-        initGeneralConfigSettings();
-
-        getConfig().options().copyDefaults(true);
-        saveConfig();
-    }
-
-    private void initGeneralConfigSettings() {
-        FileConfiguration config = getConfig();
-        config.addDefault("General.Check-Update", true);
-        config.addDefault("General.Compress-Replays", true);  // GZIP compress replay data
-        config.addDefault("General.Storage-Type", "file");  // Valid options: "file","mysql"
-        config.addDefault("General.MySQL.host", "host");
-        config.addDefault("General.MySQL.port", 3306);
-        config.addDefault("General.MySQL.database", "database");
-        config.addDefault("General.MySQL.user", "username");
-        config.addDefault("General.MySQL.password", "password");
+        new ReplayConfigManager(this).initialize();
     }
 
     private void checkForUpdate() {
-        if (!getConfig().getBoolean("General.Check-Update"))
+        if (!ReplayConfigSetting.CHECK_UPDATE.getBoolean(getConfig()))
             return;
 
         String currentVersion = getPluginMeta().getVersion();
@@ -134,20 +122,21 @@ public class Replay extends JavaPlugin {
 
     private void initStorage() {
         FileConfiguration config = getConfig();
-        if (getConfig().getString("General.Storage-Type").contentEquals("mysql")) {
-            String host = config.getString("General.MySQL.host");
-            int port = config.getInt("General.MySQL.port");
-            String database = config.getString("General.MySQL.database");
-            String user = config.getString("General.MySQL.user");
-            String password = config.getString("General.MySQL.password");
+        String storageType = ReplayConfigSetting.STORAGE_TYPE.getString(config).toLowerCase(Locale.ROOT);
+        if (storageType.contentEquals("mysql")) {
+            String host = ReplayConfigSetting.MYSQL_HOST.getString(config);
+            int port = ReplayConfigSetting.MYSQL_PORT.getInt(config);
+            String database = ReplayConfigSetting.MYSQL_DATABASE.getString(config);
+            String user = ReplayConfigSetting.MYSQL_USER.getString(config);
+            String password = ReplayConfigSetting.MYSQL_PASSWORD.getString(config);
 
             connectionManager = new MySQLConnectionManager(host, port, database, user, password);
 
             storage = new MySQLReplayStorage(connectionManager.getDataSource(), this);
-        } else if (getConfig().getString("General.Storage-Type").contentEquals("file")) {
+        } else if (storageType.contentEquals("file")) {
             storage = new FileReplayStorage(this);
         } else {
-            getLogger().log(Level.SEVERE, "Invalid storage selected: " + getConfig().getString("General.Storage-Type"));
+            getLogger().log(Level.SEVERE, "Invalid storage selected: " + storageType);
             getLogger().log(Level.SEVERE, "Valid types: file, mysql");
             getLogger().log(Level.SEVERE, "Defaulting to file");
             storage = new FileReplayStorage(this);

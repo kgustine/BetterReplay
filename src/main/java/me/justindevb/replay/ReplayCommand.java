@@ -1,6 +1,7 @@
 package me.justindevb.replay;
 
 import me.justindevb.replay.api.ReplayManager;
+import me.justindevb.replay.config.ReplayConfigSetting;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.event.ClickEvent;
 import net.kyori.adventure.text.event.HoverEvent;
@@ -137,7 +138,7 @@ public class ReplayCommand implements CommandExecutor, TabCompleter {
                                 return;
                             }
 
-                            int perPage = Replay.getInstance().getConfig().getInt("list-page-size", 10);
+                            int perPage = ReplayConfigSetting.LIST_PAGE_SIZE.getInt(Replay.getInstance().getConfig());
                             int totalPages = (int) Math.ceil((double) replays.size() / perPage);
 
                             if (page > totalPages) {
