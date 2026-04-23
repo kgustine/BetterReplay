@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Source organization plan executed (Tier 1 + Tier 2 package restructure)
 - Enum-based config settings model with centralized, typed config keys (pending merge in #36)
 - Versioned config migration with one-time comment backfill for legacy config files (pending merge in #36)
+- Chunk data recording design document with config, storage container, compression, playback, and teardown plan (`docs/CHUNK_DATA_RECORDING.md`)
 
 ### Fixed
 - `activeSessions` in `RecorderManager` changed to `ConcurrentHashMap` to prevent `ConcurrentModificationException` (#33)
