@@ -47,6 +47,8 @@ The `replay.bin` entry contains the finalized replay payload:
 - decompressed fully into a heap `byte[]` when loaded for playback
 - decoded lazily from that in-memory byte array as playback advances
 
+The v1 implementation stores `replay.bin` as a single LZ4 frame.
+
 ## Archive Layout
 
 The `.br` file is a ZIP-style archive whose entries are stored using `STORE` rather than a second archive-level compression pass.
@@ -74,6 +76,8 @@ After LZ4 decompression, `replay.bin` is treated as a single binary payload with
 1. payload header
 2. event stream
 3. tick index section
+
+The payload ends with an 8-byte little-endian footer that points to the start of the tick index section.
 
 This model matches the chosen goals:
 
@@ -273,6 +277,26 @@ The finalized replay payload includes a tick index section used to seek quickly 
 
 Both values are required in every v1 index entry. Ticks must align to the fixed 50-tick checkpoint interval.
 
+### Exact v1 index section layout
+
+The index section begins at the footer offset and uses this layout:
+
+| Field | Encoding | Notes |
+|-------|----------|-------|
+| `indexMagic` | 4 raw bytes | ASCII `BRIX` |
+| `stringCount` | unsigned varint | Number of finalized string-table entries |
+| `strings` | repeated varint length + UTF-8 bytes | Entire finalized string table in index order |
+| `tickIndexCount` | unsigned varint | Number of tick-index entries |
+| `tickIndexEntries` | repeated fixed-width entries | Each entry is 12 bytes |
+
+After the index section, the payload ends with:
+
+| Field | Width | Encoding |
+|-------|-------|----------|
+| `indexSectionOffset` | 8 bytes | little-endian signed integer, non-negative in valid files |
+
+The footer points to the first byte of `indexMagic`.
+
 ### Why explicit tick + offset entries
 
 - more robust than deriving ticks only from entry position
@@ -290,8 +314,9 @@ Both values are required in every v1 index entry. Ticks must align to the fixed 
 To seek to tick `T`:
 
 1. find the nearest checkpoint at or before `T`
-2. jump to that stored byte offset
-3. decode forward until tick `T` is reached
+2. preload the finalized string table from the index section
+3. jump to that stored byte offset
+4. decode forward until tick `T` is reached
 
 ## Finalized Payload Integrity
 

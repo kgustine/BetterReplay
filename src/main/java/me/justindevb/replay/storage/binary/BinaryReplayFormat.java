@@ -29,6 +29,8 @@ public final class BinaryReplayFormat {
             + PAYLOAD_HEADER_FLAGS_BYTES
             + PAYLOAD_HEADER_RESERVED_BYTES;
     public static final int PAYLOAD_FLAGS_NONE = 0;
+    public static final byte[] INDEX_SECTION_MAGIC = new byte[] {'B', 'R', 'I', 'X'};
+    public static final int INDEX_SECTION_FOOTER_BYTES = Long.BYTES;
 
     public static final ByteOrder PRIMITIVE_BYTE_ORDER = ByteOrder.LITTLE_ENDIAN;
     public static final Charset STRING_CHARSET = StandardCharsets.UTF_8;
@@ -56,6 +58,10 @@ public final class BinaryReplayFormat {
 
     public static byte[] payloadMagicBytes() {
         return PAYLOAD_MAGIC.clone();
+    }
+
+    public static byte[] indexSectionMagicBytes() {
+        return INDEX_SECTION_MAGIC.clone();
     }
 
     public static String payloadMagicHex() {

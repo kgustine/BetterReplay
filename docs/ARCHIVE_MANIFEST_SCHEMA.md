@@ -104,12 +104,13 @@ Meaning:
 
 Representation:
 
-- lowercase hexadecimal string is recommended for v1
+- lowercase hexadecimal string is required for v1
+- CRC32C values are stored as 8 lowercase hexadecimal digits
 
 Example:
 
 ```json
-"payloadChecksum": "7d8f8f2b0c7f3fd68e4ed5f5fd6cb2fe"
+"payloadChecksum": "7d8f8f2b"
 ```
 
 ### `payloadChecksumAlgorithm`
@@ -147,7 +148,7 @@ Example:
   "formatVersion": 1,
   "recordedWithVersion": "1.5.0-SNAPSHOT",
   "minimumViewerVersion": "1.5.0",
-  "payloadChecksum": "7d8f8f2b0c7f3fd68e4ed5f5fd6cb2fe",
+  "payloadChecksum": "7d8f8f2b",
   "payloadChecksumAlgorithm": "CRC32C"
 }
 ```

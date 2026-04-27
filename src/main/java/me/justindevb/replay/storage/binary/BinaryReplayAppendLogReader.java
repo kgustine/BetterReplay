@@ -3,7 +3,6 @@ package me.justindevb.replay.storage.binary;
 import me.justindevb.replay.recording.TimelineEvent;
 
 import java.io.IOException;
-import java.nio.ByteBuffer;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -16,52 +15,126 @@ import java.util.zip.CRC32C;
 public final class BinaryReplayAppendLogReader {
 
     public List<TimelineEvent> readTimeline(Path path) throws IOException {
-        List<String> stringTable = new ArrayList<>();
-        List<TimelineEvent> timeline = new ArrayList<>();
-        for (DecodedRecord record : readRecords(path)) {
-            if (record.type() == BinaryRecordType.DEFINE_STRING) {
-                BinaryReplayAppendLogCodec.DefinedString definedString = BinaryReplayAppendLogCodec.decodeDefineString(record.payload());
-                if (definedString.index() != stringTable.size()) {
-                    throw new IOException("Unexpected string-table index " + definedString.index() + " while reading append-log");
-                }
-                stringTable.add(definedString.value());
-                continue;
-            }
-            timeline.add(BinaryReplayAppendLogCodec.decodeEvent(record.type(), record.payload(), stringTable));
+        BinaryReplayAppendLogRecovery recovery = recover(path);
+        if (!recovery.isComplete()) {
+            throw new IOException("Append-log ended with " + recovery.stopReason());
         }
-        return timeline;
+        return recovery.timeline();
     }
 
     public List<DecodedRecord> readRecords(Path path) throws IOException {
+        BinaryReplayAppendLogRecovery recovery = recover(path);
+        if (!recovery.isComplete()) {
+            throw new IOException("Append-log ended with " + recovery.stopReason());
+        }
+        return recovery.records();
+    }
+
+    public BinaryReplayAppendLogRecovery recover(Path path) throws IOException {
         if (!Files.exists(path)) {
-            return List.of();
+            return new BinaryReplayAppendLogRecovery(List.of(), List.of(), List.of(), BinaryReplayRecoveryStopReason.CLEAN_EOF, 0);
         }
 
         byte[] bytes = Files.readAllBytes(path);
-        BinaryReplayAppendLogCodec.Cursor cursor = new BinaryReplayAppendLogCodec.Cursor(bytes);
+        List<String> stringTable = new ArrayList<>();
+        List<TimelineEvent> timeline = new ArrayList<>();
         List<DecodedRecord> records = new ArrayList<>();
-        while (cursor.remainingBytes().length > 0) {
-            int recordLength = cursor.readVarInt();
-            byte[] recordContent = cursor.readBytes(recordLength);
-            int storedChecksum = cursor.readInt();
-            int computedChecksum = calculateCrc32c(recordContent);
-            if (storedChecksum != computedChecksum) {
-                throw new IOException("Append-log CRC32C mismatch");
+        int offset = 0;
+
+        while (offset < bytes.length) {
+            VarIntRead recordLengthRead = tryReadVarInt(bytes, offset);
+            if (recordLengthRead == null) {
+                return new BinaryReplayAppendLogRecovery(records, timeline, stringTable,
+                        BinaryReplayRecoveryStopReason.TRUNCATED_RECORD_LENGTH, offset);
             }
 
-            BinaryReplayAppendLogCodec.Cursor recordCursor = new BinaryReplayAppendLogCodec.Cursor(recordContent);
-            int recordTypeTag = recordCursor.readVarInt();
-            BinaryRecordType recordType = BinaryRecordType.fromTag(recordTypeTag)
-                    .orElseThrow(() -> new IOException("Unknown append-log record tag: " + recordTypeTag));
-            records.add(new DecodedRecord(recordType, recordCursor.remainingBytes(), storedChecksum, recordContent));
+            int recordLength = recordLengthRead.value();
+            int recordContentOffset = recordLengthRead.nextOffset();
+            int recordEnd = recordContentOffset + recordLength + BinaryReplayFormat.APPEND_LOG_CRC_BYTES;
+            if (recordLength < 0 || recordEnd > bytes.length) {
+                return new BinaryReplayAppendLogRecovery(records, timeline, stringTable,
+                        BinaryReplayRecoveryStopReason.TRUNCATED_RECORD, offset);
+            }
+
+            byte[] recordContent = slice(bytes, recordContentOffset, recordLength);
+            int storedChecksum = readLittleEndianInt(bytes, recordContentOffset + recordLength);
+            int computedChecksum = calculateCrc32c(recordContent);
+            if (storedChecksum != computedChecksum) {
+                return new BinaryReplayAppendLogRecovery(records, timeline, stringTable,
+                        BinaryReplayRecoveryStopReason.CHECKSUM_MISMATCH, offset);
+            }
+
+            try {
+                DecodedRecord record = decodeRecord(recordContent, storedChecksum);
+                if (record.type() == BinaryRecordType.DEFINE_STRING) {
+                    BinaryReplayAppendLogCodec.DefinedString definedString = BinaryReplayAppendLogCodec.decodeDefineString(record.payload());
+                    if (definedString.index() != stringTable.size()) {
+                        return new BinaryReplayAppendLogRecovery(records, timeline, stringTable,
+                                BinaryReplayRecoveryStopReason.MALFORMED_RECORD, offset);
+                    }
+                    stringTable.add(definedString.value());
+                } else {
+                    timeline.add(BinaryReplayAppendLogCodec.decodeEvent(record.type(), record.payload(), stringTable));
+                }
+                records.add(record);
+            } catch (IllegalArgumentException ex) {
+                return new BinaryReplayAppendLogRecovery(records, timeline, stringTable,
+                        BinaryReplayRecoveryStopReason.MALFORMED_RECORD, offset);
+            }
+
+            offset = recordEnd;
         }
-        return records;
+
+        return new BinaryReplayAppendLogRecovery(records, timeline, stringTable,
+                BinaryReplayRecoveryStopReason.CLEAN_EOF, offset);
     }
 
     private static int calculateCrc32c(byte[] recordContent) {
         CRC32C crc32c = new CRC32C();
         crc32c.update(recordContent, 0, recordContent.length);
         return (int) crc32c.getValue();
+    }
+
+    private static DecodedRecord decodeRecord(byte[] recordContent, int storedChecksum) throws IOException {
+        BinaryReplayAppendLogCodec.Cursor recordCursor = new BinaryReplayAppendLogCodec.Cursor(recordContent);
+        int recordTypeTag = recordCursor.readVarInt();
+        BinaryRecordType recordType = BinaryRecordType.fromTag(recordTypeTag)
+                .orElseThrow(() -> new IOException("Unknown append-log record tag: " + recordTypeTag));
+        return new DecodedRecord(recordType, recordCursor.remainingBytes(), storedChecksum, recordContent);
+    }
+
+    private static VarIntRead tryReadVarInt(byte[] bytes, int offset) {
+        int value = 0;
+        int shift = 0;
+        int currentOffset = offset;
+        while (currentOffset < bytes.length) {
+            int current = bytes[currentOffset++] & 0xFF;
+            value |= (current & 0x7F) << shift;
+            if ((current & 0x80) == 0) {
+                return new VarIntRead(value, currentOffset);
+            }
+            shift += 7;
+            if (shift > 28) {
+                return null;
+            }
+        }
+        return null;
+    }
+
+    private static int readLittleEndianInt(byte[] bytes, int offset) {
+        return (bytes[offset] & 0xFF)
+                | ((bytes[offset + 1] & 0xFF) << 8)
+                | ((bytes[offset + 2] & 0xFF) << 16)
+                | ((bytes[offset + 3] & 0xFF) << 24);
+    }
+
+    private static byte[] slice(byte[] bytes, int offset, int length) {
+        byte[] copy = new byte[length];
+        System.arraycopy(bytes, offset, copy, 0, length);
+        return copy;
+    }
+
+    private record VarIntRead(int value, int nextOffset) {
     }
 
     public record DecodedRecord(BinaryRecordType type, byte[] payload, int storedChecksum, byte[] checksummedBytes) {
