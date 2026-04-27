@@ -126,12 +126,19 @@ Rules:
 
 - readers must reject values they do not support
 - the algorithm name should be stable and explicit rather than implied
+- v1 uses the exact literal `CRC32C`
 
 Example:
 
 ```json
 "payloadChecksumAlgorithm": "CRC32C"
 ```
+
+### v1 checksum representation rules
+
+- `payloadChecksum` must be stored as lowercase hexadecimal
+- `payloadChecksumAlgorithm` must be `CRC32C`
+- the checksum is calculated over the exact stored bytes of `replay.bin`
 
 ## Example v1 Manifest
 

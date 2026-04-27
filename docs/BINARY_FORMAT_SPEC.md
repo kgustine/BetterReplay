@@ -92,11 +92,24 @@ The payload begins with a small fixed header used to identify the payload and su
 | magic bytes | Identifies the payload as a BetterReplay binary replay payload |
 | payload format version | Matches the archive `formatVersion` conceptually for parser compatibility |
 | reserved flags | Reserved for future format-level behavior |
+| reserved bytes | Must be zero in v1 |
+
+### Exact v1 header layout
+
+| Field | Width | Encoding | v1 value |
+|-------|-------|----------|----------|
+| magic | 4 bytes | raw ASCII bytes | `BRPL` (`0x42 0x52 0x50 0x4C`) |
+| payload format version | 1 byte | unsigned byte | `0x01` |
+| flags | 1 byte | unsigned byte | `0x00` |
+| reserved | 2 bytes | zero-filled | `0x00 0x00` |
+
+Total v1 payload header size: `8` bytes.
 
 ### v1 header rules
 
 - the header must be present before the first event record
 - the payload format version for v1 is `1`
+- the primitive byte order for multi-byte numeric fields is little-endian
 - unknown or incompatible payload header values must fail replay load immediately
 
 This format remains strict in v1. If the payload header is invalid, the replay is treated as malformed or unsupported.
@@ -108,6 +121,31 @@ The event stream is the ordered sequence of decoded replay events.
 Each event type is identified by a numeric tag rather than a string discriminator.
 
 The event stream may also contain `DEFINE_STRING` records, which populate the string table used by later events.
+
+### Record tag table
+
+The record tag namespace is frozen for v1.
+
+| Tag | Record |
+|-----|--------|
+| `0x00` | `DEFINE_STRING` |
+| `0x01` | `PlayerMove` |
+| `0x02` | `EntityMove` |
+| `0x03` | `InventoryUpdate` |
+| `0x04` | `HeldItemChange` |
+| `0x05` | `BlockBreak` |
+| `0x06` | `BlockBreakComplete` |
+| `0x07` | `BlockBreakStage` |
+| `0x08` | `BlockPlace` |
+| `0x09` | `ItemDrop` |
+| `0x0A` | `Attack` |
+| `0x0B` | `Swing` |
+| `0x0C` | `Damaged` |
+| `0x0D` | `SprintToggle` |
+| `0x0E` | `SneakToggle` |
+| `0x0F` | `EntitySpawn` |
+| `0x10` | `EntityDeath` |
+| `0x11` | `PlayerQuit` |
 
 ### Event stream rules
 
@@ -125,8 +163,8 @@ Each finalized replay payload record uses explicit length framing.
 
 | Field | Encoding | Notes |
 |-------|----------|-------|
-| `recordLength` | varint | Length of the record contents after the length field |
-| `recordType` | varint or 1 byte tag | Event tag or special tag such as `DEFINE_STRING` |
+| `recordLength` | unsigned LEB128 / protobuf-style varint | Length of the record contents after the length field |
+| `recordType` | unsigned LEB128 / protobuf-style varint | Event tag or special tag such as `DEFINE_STRING` |
 | `payload` | raw bytes | Record-specific payload |
 
 ### Framing rules
@@ -134,6 +172,7 @@ Each finalized replay payload record uses explicit length framing.
 - `recordLength` includes everything in the record except `recordLength` itself
 - every record must be skippable based on `recordLength`
 - unknown event tags are a hard failure in v1, even if the replay passed the version gate
+- all v1 varints are non-negative and are limited to 5 bytes for `int`-sized values
 
 ## String Table
 
@@ -154,8 +193,16 @@ The format uses a string table to avoid repeating UUIDs, names, world names, ent
 ### String table rules
 
 - string indices are encoded as varints
-- string values are encoded as UTF-8 with explicit length framing
+- string values are encoded as UTF-8 with a non-negative varint byte-length prefix followed by raw UTF-8 bytes
 - a string index is valid only if it has already been defined in the stream or loaded from the finalized index section
+- the first defined string uses index `0`
+
+### `DEFINE_STRING` payload layout
+
+| Field | Encoding | Notes |
+|-------|----------|-------|
+| `stringIndex` | unsigned varint | Must match the next sequential string-table slot |
+| `stringValue` | varint length + UTF-8 bytes | Length is the encoded byte length, not character count |
 
 ## Integer Encoding
 
@@ -165,8 +212,16 @@ The format uses varint encoding for compact integer storage where fixed-width in
 
 - `recordLength`
 - string table indices
-- record tags, when represented as varints
+- record tags
 - other compact integer fields where fixed width is not required
+
+### Exact v1 varint format
+
+- unsigned, non-negative integer encoding only
+- 7 payload bits per byte
+- high bit set means another byte follows
+- little-endian bit packing across bytes (standard unsigned LEB128 / Protocol Buffers varint)
+- maximum width is 5 bytes for 32-bit values used in v1 framing and string references
 
 ### Not typically used for
 
@@ -181,10 +236,20 @@ Typical examples:
 
 - coordinates as raw doubles
 - yaw and pitch as raw floats
-- tick values in index entries as explicit numeric values
+- tick values in index entries as explicit 32-bit integers
 - offsets as 64-bit integers
 
 This avoids the text formatting and parsing cost that made the JSON path expensive.
+
+### Exact primitive rules
+
+| Primitive | Encoding |
+|-----------|----------|
+| `boolean` | single byte: `0x00` false, `0x01` true |
+| `int32` | 4-byte little-endian two's-complement |
+| `int64` | 8-byte little-endian two's-complement |
+| `float32` | 4-byte IEEE 754 little-endian |
+| `float64` | 8-byte IEEE 754 little-endian |
 
 ## Tick Index
 
@@ -197,6 +262,16 @@ The finalized replay payload includes a tick index section used to seek quickly 
 	- the checkpoint tick
 	- the byte offset of the first event record at or before that checkpoint tick
 - offsets are stored as 64-bit values
+- each index entry is fixed-width at 12 bytes total
+
+### Exact entry layout
+
+| Field | Width | Encoding |
+|-------|-------|----------|
+| checkpoint tick | 4 bytes | little-endian signed integer, non-negative in valid files |
+| byte offset | 8 bytes | little-endian signed integer, non-negative in valid files |
+
+Both values are required in every v1 index entry. Ticks must align to the fixed 50-tick checkpoint interval.
 
 ### Why explicit tick + offset entries
 
