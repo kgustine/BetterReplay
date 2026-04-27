@@ -278,8 +278,8 @@ Decision:
 	- legacy JSON replays
 	- new `.br` binary replays
 - New recordings should always be written in the binary `.br` format.
-- Plan to **remove JSON replay support in plugin version 2**.
-- By the time version 2 lands, the expected useful life of old JSON replays should have already expired, so an explicit migration path is not worth the added complexity.
+- Plan to remove JSON replay support in a **future release, with timing still to be determined**.
+- Because replay useful life is expected to be short, an explicit migration path is still not worth the added complexity even though the exact removal release/date is not yet scheduled.
 
 Rationale:
 
@@ -287,7 +287,7 @@ Rationale:
 - Building and maintaining a migration system adds implementation complexity, failure handling, testing burden, and user-facing edge cases for little practical benefit.
 - Supporting both readers temporarily is much simpler than building a conversion pipeline for both file and MySQL backends.
 - This approach allows a clean rollout of the new binary format without forcing administrators to run conversions or wait through startup migration tasks.
-- Removing JSON support in version 2 gives a clear deprecation window while avoiding indefinite maintenance of the legacy format.
+- Leaving the exact removal version/date open preserves flexibility while still making it clear that JSON support is legacy compatibility rather than a permanent format commitment.
 
 ### Recommended answers to the Question 4 prompts
 
@@ -308,14 +308,14 @@ Rationale:
 
 - The replay loader must detect whether a replay is JSON or `.br` and dispatch to the appropriate reader.
 - The replay recorder always writes `.br` format for new recordings.
-- The plugin should clearly document that JSON replay support is legacy compatibility only and is planned for removal in version 2.
-- Once version 2 is released, JSON replay support can be deleted entirely, simplifying the codebase.
+- The plugin should clearly document that JSON replay support is legacy compatibility only and is planned for removal in a future release.
+- Once a removal release is explicitly chosen, JSON replay support can be deleted entirely, simplifying the codebase.
 
 Follow-up:
 
 - Document the deprecation timeline for JSON replay support in the changelog and user-facing docs when the binary format ships.
 - Ensure the loader can reliably distinguish JSON and `.br` payloads for both file and MySQL backends.
-- Decide whether version 2 will hard-drop JSON support immediately or behind a temporary compatibility flag during the transition release.
+- If and when a removal release is scheduled, decide whether JSON support will be hard-dropped immediately or gated behind a temporary compatibility flag during the transition.
 
 ## 5. Versioning Strategy
 

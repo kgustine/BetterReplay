@@ -58,7 +58,7 @@ This is intentional. Replay useful life is expected to be short enough that buil
 
 ### Removal target
 
-- plugin version 2
+- Future release, date TBD
 
 ### Operational impact
 

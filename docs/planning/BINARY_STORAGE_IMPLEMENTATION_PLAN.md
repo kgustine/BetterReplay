@@ -28,7 +28,7 @@ Recommended order:
 4. Build archive reading and playback loading.
 5. Integrate with file and MySQL backends.
 6. Add export/query filtering on top of the binary reader.
-7. Keep legacy JSON reading until version 2.
+7. Keep legacy JSON reading until its future removal is explicitly scheduled.
 
 This keeps each phase testable and avoids a large all-or-nothing rewrite.
 
