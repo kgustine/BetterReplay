@@ -93,10 +93,10 @@ Valid values for `General.Storage-Type` are:
 
 - `file`
   - Stores replay data under the plugin data folder.
-  - Current production codec writes versioned JSON payloads while the storage layer chooses formats through `ReplayStorageCodec`.
+  - New saves still use the current JSON codec, and the loader now auto-detects both legacy JSON payloads and finalized binary `.br` archives through `ReplayStorageCodec`.
 - `mysql`
   - Stores replay data in a MySQL table (`replays`) using the configured `General.MySQL.*` values.
-  - Current production codec stores the same versioned JSON payloads as the file backend.
+  - New saves still use the current JSON codec, and the loader now auto-detects both legacy JSON payloads and finalized binary `.br` archives.
 
 These values should be lowercase as shown above.
 

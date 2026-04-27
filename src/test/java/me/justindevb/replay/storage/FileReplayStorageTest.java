@@ -2,6 +2,7 @@ package me.justindevb.replay.storage;
 
 import me.justindevb.replay.Replay;
 import me.justindevb.replay.recording.TimelineEvent;
+import me.justindevb.replay.storage.binary.BinaryReplayStorageCodec;
 import org.bukkit.configuration.file.FileConfiguration;
 import io.papermc.paper.plugin.configuration.PluginMeta;
 import org.junit.jupiter.api.BeforeEach;
@@ -222,5 +223,19 @@ class FileReplayStorageTest {
         List<TimelineEvent> loaded = storage.loadReplay("crossformat").get();
         assertNotNull(loaded);
         assertEquals(3, loaded.size());
+    }
+
+    @Test
+    void canLoadBinaryArchiveByReplayName() throws Exception {
+        File replayDir = new File(tempDir, "replays");
+        replayDir.mkdirs();
+        byte[] archive = new BinaryReplayStorageCodec().finalizeReplay("binary", sampleTimeline(), "1.4.0");
+        Files.write(new File(replayDir, "binary.br").toPath(), archive);
+
+        List<TimelineEvent> loaded = storage.loadReplay("binary").get();
+
+        assertNotNull(loaded);
+        assertEquals(3, loaded.size());
+        assertTrue(storage.listReplays().get().contains("binary"));
     }
 }

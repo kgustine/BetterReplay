@@ -3,6 +3,8 @@ package me.justindevb.replay.storage;
 import me.justindevb.replay.Replay;
 import me.justindevb.replay.config.ReplayConfigSetting;
 import me.justindevb.replay.recording.TimelineEvent;
+import me.justindevb.replay.storage.binary.BinaryReplayFormat;
+import me.justindevb.replay.storage.binary.BinaryReplayStorageCodec;
 import me.justindevb.replay.util.io.ReplayCompressor;
 
 import java.io.*;
@@ -19,7 +21,11 @@ public class FileReplayStorage implements ReplayStorage {
     private final ReplayFormatDetector formatDetector;
 
     public FileReplayStorage(Replay replay) {
-        this(replay, new JsonReplayStorageCodec(), new DefaultReplayFormatDetector(List.of(new JsonReplayStorageCodec())));
+        this(replay, new JsonReplayStorageCodec(), defaultFormatDetector());
+    }
+
+    private static ReplayFormatDetector defaultFormatDetector() {
+        return new DefaultReplayFormatDetector(List.of(new JsonReplayStorageCodec(), new BinaryReplayStorageCodec()));
     }
 
     FileReplayStorage(Replay replay, ReplayStorageCodec saveCodec, ReplayFormatDetector formatDetector) {
@@ -46,6 +52,8 @@ public class FileReplayStorage implements ReplayStorage {
         if (compressed.exists()) return compressed;
         File plain = new File(replayFolder, name + JsonReplayStorageCodec.EXT_UNCOMPRESSED);
         if (plain.exists()) return plain;
+        File binary = new File(replayFolder, name + BinaryReplayFormat.FILE_EXTENSION);
+        if (binary.exists()) return binary;
         File preferred = new File(replayFolder, name + saveCodec.fileExtension(isCompressionEnabled()));
         if (preferred.exists()) return preferred;
         return null;
@@ -110,6 +118,7 @@ public class FileReplayStorage implements ReplayStorage {
             File[] files = replayFolder.listFiles(
                     (dir, n) -> n.endsWith(JsonReplayStorageCodec.EXT_COMPRESSED)
                             || n.endsWith(JsonReplayStorageCodec.EXT_UNCOMPRESSED)
+                            || n.endsWith(BinaryReplayFormat.FILE_EXTENSION)
                             || n.endsWith(saveCodec.fileExtension(false))
                             || n.endsWith(saveCodec.fileExtension(true)));
             List<String> names = new ArrayList<>();
@@ -130,6 +139,7 @@ public class FileReplayStorage implements ReplayStorage {
         for (String extension : List.of(
                 JsonReplayStorageCodec.EXT_COMPRESSED,
                 JsonReplayStorageCodec.EXT_UNCOMPRESSED,
+                BinaryReplayFormat.FILE_EXTENSION,
                 saveCodec.fileExtension(true),
                 saveCodec.fileExtension(false))) {
             if (fileName.endsWith(extension)) {

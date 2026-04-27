@@ -3,6 +3,7 @@ package me.justindevb.replay.storage;
 import me.justindevb.replay.Replay;
 import me.justindevb.replay.config.ReplayConfigSetting;
 import me.justindevb.replay.recording.TimelineEvent;
+import me.justindevb.replay.storage.binary.BinaryReplayStorageCodec;
 import me.justindevb.replay.util.io.ReplayCompressor;
 
 import javax.sql.DataSource;
@@ -20,7 +21,11 @@ public class MySQLReplayStorage implements ReplayStorage {
     private final ReplayFormatDetector formatDetector;
 
     public MySQLReplayStorage(DataSource dataSource, Replay replay) {
-        this(dataSource, replay, new JsonReplayStorageCodec(), new DefaultReplayFormatDetector(List.of(new JsonReplayStorageCodec())));
+        this(dataSource, replay, new JsonReplayStorageCodec(), defaultFormatDetector());
+    }
+
+    private static ReplayFormatDetector defaultFormatDetector() {
+        return new DefaultReplayFormatDetector(List.of(new JsonReplayStorageCodec(), new BinaryReplayStorageCodec()));
     }
 
     MySQLReplayStorage(DataSource dataSource, Replay replay, ReplayStorageCodec saveCodec, ReplayFormatDetector formatDetector) {
