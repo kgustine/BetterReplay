@@ -1,17 +1,11 @@
 package me.justindevb.replay.storage;
 
-import com.google.gson.Gson;
-import com.google.gson.GsonBuilder;
-import com.google.gson.reflect.TypeToken;
 import me.justindevb.replay.Replay;
 import me.justindevb.replay.config.ReplayConfigSetting;
 import me.justindevb.replay.recording.TimelineEvent;
-import me.justindevb.replay.recording.TimelineEventAdapter;
 import me.justindevb.replay.util.io.ReplayCompressor;
-import me.justindevb.replay.util.VersionUtil;
 
 import java.io.*;
-import java.lang.reflect.Type;
 import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.List;
@@ -19,19 +13,19 @@ import java.util.concurrent.CompletableFuture;
 
 public class FileReplayStorage implements ReplayStorage {
 
-    private static final String EXT_COMPRESSED   = ".json.gz";
-    private static final String EXT_UNCOMPRESSED = ".json";
-
     private final File replayFolder;
     private final Replay replay;
-    private static final Type TIMELINE_LIST_TYPE = new TypeToken<List<TimelineEvent>>() {}.getType();
-    private final Gson gson = new GsonBuilder()
-            .setPrettyPrinting()
-            .registerTypeHierarchyAdapter(TimelineEvent.class, new TimelineEventAdapter())
-            .create();
+    private final ReplayStorageCodec saveCodec;
+    private final ReplayFormatDetector formatDetector;
 
     public FileReplayStorage(Replay replay) {
+        this(replay, new JsonReplayStorageCodec(), new DefaultReplayFormatDetector(List.of(new JsonReplayStorageCodec())));
+    }
+
+    FileReplayStorage(Replay replay, ReplayStorageCodec saveCodec, ReplayFormatDetector formatDetector) {
         this.replay = replay;
+        this.saveCodec = saveCodec;
+        this.formatDetector = formatDetector;
         this.replayFolder = new File(replay.getDataFolder(), "replays");
         if (!replayFolder.exists())
             replayFolder.mkdirs();
@@ -39,7 +33,7 @@ public class FileReplayStorage implements ReplayStorage {
 
     /** Returns true when the plugin config has compression enabled (default: true). */
     private boolean isCompressionEnabled() {
-        return ReplayConfigSetting.COMPRESS_REPLAYS.getBoolean(replay.getConfig());
+        return saveCodec.supportsCompression() && ReplayConfigSetting.COMPRESS_REPLAYS.getBoolean(replay.getConfig());
     }
 
     /**
@@ -48,33 +42,38 @@ public class FileReplayStorage implements ReplayStorage {
      * Returns null when neither file exists.
      */
     private File resolveExisting(String name) {
-        File compressed = new File(replayFolder, name + EXT_COMPRESSED);
+        File compressed = new File(replayFolder, name + JsonReplayStorageCodec.EXT_COMPRESSED);
         if (compressed.exists()) return compressed;
-        File plain = new File(replayFolder, name + EXT_UNCOMPRESSED);
+        File plain = new File(replayFolder, name + JsonReplayStorageCodec.EXT_UNCOMPRESSED);
         if (plain.exists()) return plain;
+        File preferred = new File(replayFolder, name + saveCodec.fileExtension(isCompressionEnabled()));
+        if (preferred.exists()) return preferred;
         return null;
+    }
+
+    private byte[] encodeForStorage(List<TimelineEvent> timeline) throws IOException {
+        byte[] payload = saveCodec.encodeTimeline(timeline, replay.getPluginMeta().getVersion());
+        return isCompressionEnabled() ? ReplayCompressor.compress(new String(payload, java.nio.charset.StandardCharsets.UTF_8)) : payload;
+    }
+
+    private void removeLegacyJsonVariants(String name, String retainedExtension) {
+        for (String extension : List.of(JsonReplayStorageCodec.EXT_COMPRESSED, JsonReplayStorageCodec.EXT_UNCOMPRESSED)) {
+            if (!extension.equals(retainedExtension)) {
+                File legacy = new File(replayFolder, name + extension);
+                if (legacy.exists()) legacy.delete();
+            }
+        }
     }
 
     @Override
     public CompletableFuture<Void> saveReplay(String name, List<TimelineEvent> timeline) {
         return CompletableFuture.runAsync(() -> {
             try {
-                String json = VersionUtil.wrapTimeline(gson, timeline, replay.getPluginMeta().getVersion());
-                if (isCompressionEnabled()) {
-                    File file = new File(replayFolder, name + EXT_COMPRESSED);
-                    Files.write(file.toPath(), ReplayCompressor.compress(json));
-                    // Remove any legacy uncompressed file with the same name
-                    File legacy = new File(replayFolder, name + EXT_UNCOMPRESSED);
-                    if (legacy.exists()) legacy.delete();
-                } else {
-                    File file = new File(replayFolder, name + EXT_UNCOMPRESSED);
-                    try (FileWriter writer = new FileWriter(file)) {
-                        writer.write(json);
-                    }
-                    // Remove any compressed file with the same name
-                    File compressed = new File(replayFolder, name + EXT_COMPRESSED);
-                    if (compressed.exists()) compressed.delete();
-                }
+                boolean compressionEnabled = isCompressionEnabled();
+                String extension = saveCodec.fileExtension(compressionEnabled);
+                File file = new File(replayFolder, name + extension);
+                Files.write(file.toPath(), encodeForStorage(timeline));
+                removeLegacyJsonVariants(name, extension);
             } catch (IOException e) {
                 throw new RuntimeException("Failed to save replay " + name, e);
             }
@@ -89,9 +88,8 @@ public class FileReplayStorage implements ReplayStorage {
 
             try {
                 byte[] bytes = Files.readAllBytes(file.toPath());
-                // Auto-detect: works for both compressed and plain-text files
-                String json = ReplayCompressor.decompressIfNeeded(bytes);
-                return VersionUtil.parseReplayJson(gson, json, replay.getPluginMeta().getVersion(), TIMELINE_LIST_TYPE);
+                ReplayStorageCodec codec = formatDetector.detectCodec(file.getName(), bytes);
+                return codec.decodeTimeline(bytes, replay.getPluginMeta().getVersion());
             } catch (IOException e) {
                 throw new RuntimeException("Failed to load replay " + name, e);
             }
@@ -110,20 +108,35 @@ public class FileReplayStorage implements ReplayStorage {
     public CompletableFuture<List<String>> listReplays() {
         return CompletableFuture.supplyAsync(() -> {
             File[] files = replayFolder.listFiles(
-                    (dir, n) -> n.endsWith(EXT_COMPRESSED) || n.endsWith(EXT_UNCOMPRESSED));
+                    (dir, n) -> n.endsWith(JsonReplayStorageCodec.EXT_COMPRESSED)
+                            || n.endsWith(JsonReplayStorageCodec.EXT_UNCOMPRESSED)
+                            || n.endsWith(saveCodec.fileExtension(false))
+                            || n.endsWith(saveCodec.fileExtension(true)));
             List<String> names = new ArrayList<>();
             if (files != null) {
                 for (File f : files) {
                     String n = f.getName();
-                    if (n.endsWith(EXT_COMPRESSED)) {
-                        names.add(n.substring(0, n.length() - EXT_COMPRESSED.length()));
-                    } else {
-                        names.add(n.substring(0, n.length() - EXT_UNCOMPRESSED.length()));
+                    String detectedExtension = detectExtension(n);
+                    if (detectedExtension != null) {
+                        names.add(n.substring(0, n.length() - detectedExtension.length()));
                     }
                 }
             }
             return names;
         });
+    }
+
+    private String detectExtension(String fileName) {
+        for (String extension : List.of(
+                JsonReplayStorageCodec.EXT_COMPRESSED,
+                JsonReplayStorageCodec.EXT_UNCOMPRESSED,
+                saveCodec.fileExtension(true),
+                saveCodec.fileExtension(false))) {
+            if (fileName.endsWith(extension)) {
+                return extension;
+            }
+        }
+        return null;
     }
 
     @Override
@@ -135,7 +148,17 @@ public class FileReplayStorage implements ReplayStorage {
     public CompletableFuture<File> getReplayFile(String name) {
         return CompletableFuture.supplyAsync(() -> {
             File file = resolveExisting(name);
-            return (file != null && file.isFile()) ? file : null;
+            if (file == null || !file.isFile()) {
+                return null;
+            }
+
+            try {
+                byte[] bytes = Files.readAllBytes(file.toPath());
+                ReplayStorageCodec codec = formatDetector.detectCodec(file.getName(), bytes);
+                return codec.writeReplayFile(name, bytes, replay.getPluginMeta().getVersion());
+            } catch (IOException e) {
+                throw new RuntimeException("Failed to get replay file " + name, e);
+            }
         });
     }
 }

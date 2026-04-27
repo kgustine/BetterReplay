@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Enum-based config settings model with centralized, typed config keys (pending merge in #36)
 - Versioned config migration with one-time comment backfill for legacy config files (pending merge in #36)
 - Phase 1 binary replay format contracts for `.br` archives, manifest defaults, event tags, varint framing, and tick-index layout
+- Phase 2 storage abstractions: `ReplayStorageCodec`, `ReplayFormatDetector`, append/finalizer/archive reader interfaces, and JSON codec seam coverage
 
 ### Fixed
 - `activeSessions` in `RecorderManager` changed to `ConcurrentHashMap` to prevent `ConcurrentModificationException` (#33)

@@ -44,9 +44,11 @@ In short: BetterReplay focuses on server-managed replay workflows and API-driven
 - Replay playback lifecycle
   - [src/main/java/me/justindevb/replay/ReplaySession.java](src/main/java/me/justindevb/replay/ReplaySession.java)
 - Storage abstraction and implementations
-  - [src/main/java/me/justindevb/replay/util/storage/ReplayStorage.java](src/main/java/me/justindevb/replay/util/storage/ReplayStorage.java)
-  - [src/main/java/me/justindevb/replay/util/storage/FileReplayStorage.java](src/main/java/me/justindevb/replay/util/storage/FileReplayStorage.java)
-  - [src/main/java/me/justindevb/replay/util/storage/MySQLReplayStorage.java](src/main/java/me/justindevb/replay/util/storage/MySQLReplayStorage.java)
+  - [src/main/java/me/justindevb/replay/storage/ReplayStorage.java](src/main/java/me/justindevb/replay/storage/ReplayStorage.java)
+  - [src/main/java/me/justindevb/replay/storage/FileReplayStorage.java](src/main/java/me/justindevb/replay/storage/FileReplayStorage.java)
+  - [src/main/java/me/justindevb/replay/storage/MySQLReplayStorage.java](src/main/java/me/justindevb/replay/storage/MySQLReplayStorage.java)
+  - [src/main/java/me/justindevb/replay/storage/ReplayStorageCodec.java](src/main/java/me/justindevb/replay/storage/ReplayStorageCodec.java)
+  - [src/main/java/me/justindevb/replay/storage/ReplayFormatDetector.java](src/main/java/me/justindevb/replay/storage/ReplayFormatDetector.java)
 
 ## Features
 
@@ -90,9 +92,11 @@ Default config keys are initialized in:
 Valid values for `General.Storage-Type` are:
 
 - `file`
-  - Stores replay data as JSON files under the plugin data folder.
+  - Stores replay data under the plugin data folder.
+  - Current production codec writes versioned JSON payloads while the storage layer chooses formats through `ReplayStorageCodec`.
 - `mysql`
   - Stores replay data in a MySQL table (`replays`) using the configured `General.MySQL.*` values.
+  - Current production codec stores the same versioned JSON payloads as the file backend.
 
 These values should be lowercase as shown above.
 
