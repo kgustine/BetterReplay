@@ -62,6 +62,7 @@ Practical interpretation:
 Follow-up:
 
 - Store the replay on disk as a **single compressed payload** rather than framed/chunked compressed blocks.
+- Use **LZ4** for the finalized replay payload compression in v1.
 - Use a heap **`byte[]`** as the in-memory replay buffer after decompression.
 - Rationale for single compressed payload: it matches the chosen load model of “decompress once, then play from memory”, keeps the implementation simple, and still fits the future plan of placing the replay payload inside a larger archive that may also contain chunk data or metadata.
 - Rationale for heap `byte[]`: it is the simplest and most maintainable option for v1, works naturally with full-file decompression and lazy decoding, and avoids the extra complexity of direct buffers or memory-mapped files without a meaningful benefit for this design.
@@ -245,7 +246,8 @@ Rationale:
 
 Follow-up:
 
-- Verify that the existing MySQL data column type is appropriate for the expected `.br` archive size, especially once chunk data is added. If not, widen it to a suitable BLOB/LONGBLOB type.
+- The current MySQL replay payload column is **`MEDIUMBLOB`**, which is too small for the expected `.br` archive growth, especially once chunk data is included.
+- Widen the MySQL replay payload column to **`LONGBLOB`** before binary `.br` storage ships.
 - Confirm whether any current code assumes the MySQL payload is JSON text and will need to be updated to treat it as binary data.
 - Decide the exact archive manifest fields that will be stored consistently across both backends.
 
@@ -337,6 +339,7 @@ Decision:
 	- `recordedWithVersion`
 	- `minimumViewerVersion`
 	- `formatVersion`
+- Define `formatVersion` as a **simple integer**, starting at **`1`** for the first binary archive format.
 - On replay load, if `minimumViewerVersion` is **newer than the currently running plugin version**, do **not** attempt playback.
 - Instead, show a clear message telling the user which minimum plugin version is required.
 - Continue the existing philosophy: only bump `minimumViewerVersion` when a change would actually break replay viewing/playback.
@@ -350,6 +353,7 @@ Rationale:
 - `minimumViewerVersion` provides a simple and user-facing compatibility gate without requiring a complicated forward-compatibility system.
 - `recordedWithVersion` is useful for diagnostics and support.
 - `formatVersion` keeps binary layout changes separate from plugin semantic compatibility.
+- Using a simple integer for `formatVersion` keeps parser compatibility rules unambiguous and avoids overlapping responsibilities with plugin semantic versions.
 - Rejecting unsupported replays early is much safer than attempting partial playback with unknown event semantics.
 - The fact that older JSON-only plugin versions do not even discover `.br` files avoids a large class of backward-compatibility problems automatically.
 
@@ -358,7 +362,7 @@ Rationale:
 - **How are future event types added without breaking old readers?**
 	- Add the new event type, and if it would break playback in older versions, bump `minimumViewerVersion` accordingly.
 - **What happens if a replay contains an unknown event tag?**
-	- In supported readers, this should normally be prevented by the `minimumViewerVersion` gate. If encountered anyway, fail loading/playback with a clear incompatibility message rather than attempting partial interpretation.
+	- In supported readers, this should normally be prevented by the `minimumViewerVersion` gate. If encountered anyway, fail the entire replay load/playback immediately with a clear incompatibility or corruption message rather than attempting partial interpretation or skipping the event.
 - **Will the format reserve unknown-field/extension space, or require strict version matching?**
 	- Prefer mostly strict matching in v1. Keep the format simple and rely on version metadata instead of building a broad extension/ignore-unknown system immediately.
 
@@ -371,9 +375,16 @@ Rationale:
 
 Follow-up:
 
-- Decide the exact manifest/header field names and where they live inside the `.br` archive.
-- Decide whether `formatVersion` is a simple integer, semantic version string, or both.
-- Decide whether unknown event tags encountered despite a passing version gate should fail the whole replay immediately or fail that replay load with a diagnostic that can be surfaced in debug tools.
+- Use `manifest.json` at the archive root for v1 manifest metadata.
+- Use `replay.bin` at the archive root for the finalized replay payload.
+- Reserve `chunks/` for future chunk payload entries and `meta/` for future auxiliary metadata entries.
+- Use these v1 manifest field names:
+	- `formatVersion`
+	- `recordedWithVersion`
+	- `minimumViewerVersion`
+	- `payloadChecksum`
+	- `payloadChecksumAlgorithm`
+- Ensure unknown-tag failures log the tag value and relevant replay version metadata for diagnosis.
 
 ## 6. Tick Index Granularity
 
@@ -395,7 +406,10 @@ Need to define:
 Decision:
 
 - Use a **fixed checkpoint interval of 50 ticks** in v1.
-- The index should store the **byte offset of the first event record at or before each checkpoint tick**.
+- Each index entry should store both:
+	- the checkpoint **tick**
+	- the **byte offset of the first event record at or before that checkpoint tick**
+- Store tick values as explicit per-entry data in the index rather than deriving them only from entry position.
 - Store offsets as **64-bit values**.
 - Concretely, index entries would look like:
 	- tick `0` -> offset of first record for tick 0
@@ -412,6 +426,8 @@ Rationale:
 - With the chosen playback model, the full replay is already decompressed into memory, so the cost of scanning forward from a nearby checkpoint is very small.
 - Indexing every tick would increase index size and rebuild cost for little practical benefit.
 - A fixed interval is simpler than a configurable one: no extra header fields, no format variability, and fewer edge cases during rebuild/debugging.
+- Storing the checkpoint tick explicitly makes the index more robust and self-describing, which helps debugging, validation, corruption checks, and future format evolution.
+- Explicit tick values avoid coupling index correctness to assumed entry ordering, making rebuilt indexes and inspection tools easier to reason about.
 - Storing the offset of the first record at or before each checkpoint gives deterministic replay startup from any requested tick.
 - Using 64-bit offsets makes the format future-proof and avoids ever having to revisit offset-size limits as replay sizes or archive contents grow.
 - The extra space cost of 64-bit offsets is negligible because the checkpoint index is very small relative to the replay payload.
@@ -420,7 +436,7 @@ Rationale:
 
 - A 20-minute replay at 20 TPS contains **24,000 ticks**.
 - At a 50-tick checkpoint interval, that is only about **480 index entries**.
-- Even if each entry stores a tick value and 64-bit offset, the total index size remains very small.
+- Even when each entry stores both an explicit tick value and a 64-bit offset, the total index size remains very small.
 
 ### Playback behavior
 
@@ -434,7 +450,6 @@ This keeps seeking simple and predictable without needing per-tick offsets.
 
 Follow-up:
 
-- Confirm whether the stored checkpoint tick value is needed explicitly in every entry or whether the entry order alone is sufficient.
 - Validate with a prototype that scanning forward from a 50-tick checkpoint is comfortably fast for long/high-player replays.
 
 ## 7. Query Model for Debugging Tools
