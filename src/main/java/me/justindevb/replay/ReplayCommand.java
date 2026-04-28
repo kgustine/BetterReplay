@@ -2,8 +2,9 @@ package me.justindevb.replay;
 
 import me.justindevb.replay.api.ReplayManager;
 import me.justindevb.replay.benchmark.ReplayBenchmarkCommand;
-import me.justindevb.replay.export.ReplayExportCommand;
 import me.justindevb.replay.config.ReplayConfigSetting;
+import me.justindevb.replay.debug.ReplayDebugCommand;
+import me.justindevb.replay.export.ReplayExportCommand;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.event.ClickEvent;
 import net.kyori.adventure.text.event.HoverEvent;
@@ -24,15 +25,18 @@ public class ReplayCommand implements CommandExecutor, TabCompleter {
     private final ReplayManager replayManager;
     private final ReplayBenchmarkCommand replayBenchmarkCommand;
     private final ReplayExportCommand replayExportCommand;
+    private final ReplayDebugCommand replayDebugCommand;
 
     public ReplayCommand(ReplayManager replayManager) {
-        this(replayManager, null, null);
+        this(replayManager, null, null, null);
     }
 
-    ReplayCommand(ReplayManager replayManager, ReplayBenchmarkCommand replayBenchmarkCommand, ReplayExportCommand replayExportCommand) {
+    ReplayCommand(ReplayManager replayManager, ReplayBenchmarkCommand replayBenchmarkCommand, ReplayExportCommand replayExportCommand,
+                  ReplayDebugCommand replayDebugCommand) {
         this.replayManager = replayManager;
         this.replayBenchmarkCommand = replayBenchmarkCommand;
         this.replayExportCommand = replayExportCommand;
+        this.replayDebugCommand = replayDebugCommand;
     }
 
     @Override
@@ -42,6 +46,9 @@ public class ReplayCommand implements CommandExecutor, TabCompleter {
         }
         if (args.length > 0 && args[0].equalsIgnoreCase("benchmark") && replayBenchmarkCommand != null) {
             return replayBenchmarkCommand.handle(sender, args);
+        }
+        if (args.length > 0 && args[0].equalsIgnoreCase("debug") && replayDebugCommand != null) {
+            return replayDebugCommand.handle(sender, args);
         }
 
         if (!(sender instanceof Player p)) {
@@ -269,6 +276,10 @@ public class ReplayCommand implements CommandExecutor, TabCompleter {
 
         if (args.length > 0 && args[0].equalsIgnoreCase("benchmark") && replayBenchmarkCommand != null) {
             return replayBenchmarkCommand.tabComplete(sender, args);
+        }
+
+        if (args.length > 0 && args[0].equalsIgnoreCase("debug") && replayDebugCommand != null) {
+            return replayDebugCommand.tabComplete(sender, args);
         }
 
         if (args.length == 1) {

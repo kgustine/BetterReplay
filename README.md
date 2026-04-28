@@ -75,6 +75,8 @@ Subcommands:
 - delete
 - export (hidden admin utility command)
 - benchmark (hidden admin diagnostic command)
+- debug dump (hidden admin dump command)
+- debug info (hidden admin metadata command)
 
 Permissions:
 - replay.start
@@ -84,11 +86,20 @@ Permissions:
 - replay.delete
 - replay.export
 - replay.benchmark
+- replay.debug
 - replay.*
 
 Hidden export usage:
 - `/replay export <name> [player=<name|all>] [start=<tick>] [end=<tick>]` exports a replay to a `.br` file under the plugin `exports/` folder and prints the generated path.
 - Replay names may contain spaces as long as all filter arguments come after the full replay name.
+
+Hidden debug dump usage:
+- `/replay debug dump <name> [start=<tick>] [end=<tick>]` writes a human-readable text dump under the plugin `dumps/` folder and prints the generated path.
+- Replay names may contain spaces as long as all filter arguments come after the full replay name.
+
+Hidden debug info usage:
+- `/replay debug info <name>` prints replay metadata including format, recording timestamp, record count, tick length, compressed/decompressed sizes, and version/index details.
+- Replay names may contain spaces.
 
 Hidden benchmark usage:
 - `/replay benchmark run <small|medium|large|all>` starts an asynchronous synthetic benchmark run and writes both Markdown and JSON reports under the plugin `benchmarks/` folder.

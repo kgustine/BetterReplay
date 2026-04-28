@@ -37,6 +37,22 @@ public interface ReplayStorageCodec extends ReplayFinalizer, ReplayArchiveReader
 
     List<TimelineEvent> decodeTimeline(byte[] storedBytes, String runningVersion) throws IOException;
 
+    default ReplayInspection inspectReplay(String replayName, byte[] storedBytes, String runningVersion) throws IOException {
+        List<TimelineEvent> timeline = decodeTimeline(storedBytes, runningVersion);
+        return ReplayInspectionBuilder.build(
+                replayName,
+                format(),
+                storedBytes.length,
+                storedBytes.length,
+                storedBytes.length,
+                null,
+                null,
+                null,
+                false,
+                0,
+                timeline);
+    }
+
     @Override
     default List<TimelineEvent> readTimeline(byte[] payload, String runningVersion) throws IOException {
         return decodeTimeline(payload, runningVersion);

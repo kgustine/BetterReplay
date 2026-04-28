@@ -2,6 +2,7 @@ package me.justindevb.replay.storage;
 
 import me.justindevb.replay.Replay;
 import me.justindevb.replay.api.ReplayExportQuery;
+import me.justindevb.replay.storage.ReplayInspection;
 import me.justindevb.replay.recording.TimelineEvent;
 import me.justindevb.replay.storage.binary.BinaryReplayStorageCodec;
 import org.bukkit.configuration.file.FileConfiguration;
@@ -188,6 +189,37 @@ class FileReplayStorageTest {
     @Test
     void getReplayFile_nonExistent_returnsNull() throws ExecutionException, InterruptedException {
         assertNull(storage.getReplayFile("nope").get());
+    }
+
+    @Test
+    void getReplayInfo_returnsTimestampCountsAndSizes() throws Exception {
+        storage.saveReplay("info", new ReplaySaveRequest(sampleTimeline(), 123456789L)).get();
+
+        ReplayInspection info = storage.getReplayInfo("info").get();
+
+        assertNotNull(info);
+        assertEquals(3, info.recordCount());
+        assertEquals(0, info.startTick());
+        assertEquals(10, info.endTick());
+        assertEquals(10, info.durationTicks());
+        assertEquals(123456789L, info.recordingStartedAtEpochMillis());
+        assertTrue(info.storedBytes() > 0);
+        assertTrue(info.compressedPayloadBytes() > 0);
+        assertTrue(info.decompressedPayloadBytes() > info.compressedPayloadBytes());
+        assertTrue(info.indexedPayload());
+    }
+
+    @Test
+    void getReplayDumpFile_writesBoundedHumanReadableFile() throws Exception {
+        storage.saveReplay("dumped", sampleTimeline()).get();
+
+        File dumped = storage.getReplayDumpFile("dumped", new me.justindevb.replay.debug.ReplayDumpQuery(5, 10)).get();
+        String dumpText = Files.readString(dumped.toPath());
+
+        assertEquals(new File(tempDir, "dumps").getCanonicalFile(), dumped.getParentFile().getCanonicalFile());
+        assertTrue(dumpText.contains("[tick=5]"));
+        assertTrue(dumpText.contains("[tick=10]"));
+        assertFalse(dumpText.contains("[tick=0]"));
     }
 
     // ── loadReplay ────────────────────────────────────────────

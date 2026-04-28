@@ -2,6 +2,7 @@ package me.justindevb.replay.storage;
 
 import me.justindevb.replay.Replay;
 import me.justindevb.replay.api.ReplayExportQuery;
+import me.justindevb.replay.debug.ReplayDumpQuery;
 import me.justindevb.replay.recording.TimelineEvent;
 import me.justindevb.replay.storage.binary.BinaryReplayStorageCodec;
 import me.justindevb.replay.util.io.ReplayCompressor;
@@ -20,6 +21,7 @@ public class MySQLReplayStorage implements ReplayStorage {
     private final ReplayStorageCodec saveCodec;
     private final ReplayFormatDetector formatDetector;
     private final ReplayExporter replayExporter;
+    private final ReplayDumpWriter replayDumpWriter;
 
     public MySQLReplayStorage(DataSource dataSource, Replay replay) {
         this(dataSource, replay, new BinaryReplayStorageCodec(), defaultFormatDetector());
@@ -35,6 +37,7 @@ public class MySQLReplayStorage implements ReplayStorage {
         this.saveCodec = saveCodec;
         this.formatDetector = formatDetector;
         this.replayExporter = new ReplayExporter(new File(replay.getDataFolder(), "exports"));
+        this.replayDumpWriter = new ReplayDumpWriter(new File(replay.getDataFolder(), "dumps"));
         init();
     }
 
@@ -228,6 +231,52 @@ public class MySQLReplayStorage implements ReplayStorage {
                 }
             } catch (Exception e) {
                 replay.getLogger().log(java.util.logging.Level.SEVERE, "Failed to export replay file: " + name, e);
+                return null;
+            }
+        });
+    }
+
+    @Override
+    public CompletableFuture<ReplayInspection> getReplayInfo(String name) {
+        return CompletableFuture.supplyAsync(() -> {
+            try (Connection conn = dataSource.getConnection();
+                 PreparedStatement ps = conn.prepareStatement("SELECT data FROM replays WHERE name=?")) {
+
+                ps.setString(1, name);
+                try (ResultSet rs = ps.executeQuery()) {
+                    if (!rs.next()) {
+                        return null;
+                    }
+
+                    byte[] data = rs.getBytes("data");
+                    ReplayStorageCodec codec = formatDetector.detectCodec(name, data);
+                    return codec.inspectReplay(name, data, replay.getPluginMeta().getVersion());
+                }
+            } catch (Exception e) {
+                replay.getLogger().log(java.util.logging.Level.SEVERE, "Failed to inspect replay file: " + name, e);
+                return null;
+            }
+        });
+    }
+
+    @Override
+    public CompletableFuture<File> getReplayDumpFile(String name, ReplayDumpQuery query) {
+        return CompletableFuture.supplyAsync(() -> {
+            try (Connection conn = dataSource.getConnection();
+                 PreparedStatement ps = conn.prepareStatement("SELECT data FROM replays WHERE name=?")) {
+
+                ps.setString(1, name);
+                try (ResultSet rs = ps.executeQuery()) {
+                    if (!rs.next()) {
+                        return null;
+                    }
+
+                    byte[] data = rs.getBytes("data");
+                    ReplayStorageCodec codec = formatDetector.detectCodec(name, data);
+                    return replayDumpWriter.writeDump(name, codec.decodeTimeline(data, replay.getPluginMeta().getVersion()), query);
+                }
+            } catch (Exception e) {
+                replay.getLogger().log(java.util.logging.Level.SEVERE, "Failed to dump replay file: " + name, e);
                 return null;
             }
         });

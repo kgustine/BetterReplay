@@ -21,6 +21,7 @@ permissions:
       replay.play: true
       replay.export: true
       replay.benchmark: true
+      replay.debug: true
   replay.start:
     description: Allows starting a new recording
     default: op
@@ -41,4 +42,7 @@ permissions:
     default: op
   replay.benchmark:
     description: Allows running the hidden replay benchmark command
+    default: op
+  replay.debug:
+    description: Allows running the hidden replay debug dump command
     default: op

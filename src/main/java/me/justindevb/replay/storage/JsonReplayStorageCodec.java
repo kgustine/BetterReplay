@@ -2,7 +2,10 @@ package me.justindevb.replay.storage;
 
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
 import com.google.gson.JsonParseException;
+import com.google.gson.JsonParser;
 import com.google.gson.reflect.TypeToken;
 import me.justindevb.replay.recording.TimelineEvent;
 import me.justindevb.replay.recording.TimelineEventAdapter;
@@ -81,6 +84,37 @@ public final class JsonReplayStorageCodec implements ReplayStorageCodec {
         } catch (RuntimeException ex) {
             throw new IOException("Failed to decode JSON replay payload", ex);
         }
+    }
+
+    @Override
+    public ReplayInspection inspectReplay(String replayName, byte[] storedBytes, String runningVersion) throws IOException {
+        String json = ReplayCompressor.decompressIfNeeded(storedBytes);
+        JsonElement root = JsonParser.parseString(json);
+        String createdBy = null;
+        String minVersion = null;
+        if (root.isJsonObject()) {
+            JsonObject object = root.getAsJsonObject();
+            if (object.has("createdBy") && !object.get("createdBy").isJsonNull()) {
+                createdBy = object.get("createdBy").getAsString();
+            }
+            if (object.has("minVersion") && !object.get("minVersion").isJsonNull()) {
+                minVersion = object.get("minVersion").getAsString();
+            }
+        }
+
+        List<TimelineEvent> timeline = VersionUtil.parseReplayJson(gson, json, runningVersion, TIMELINE_LIST_TYPE);
+        return ReplayInspectionBuilder.build(
+                replayName,
+                format(),
+                storedBytes.length,
+                storedBytes.length,
+                json.getBytes(StandardCharsets.UTF_8).length,
+                null,
+                createdBy,
+                minVersion,
+                false,
+                0,
+                timeline);
     }
 
     @Override

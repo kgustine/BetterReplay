@@ -12,6 +12,7 @@ import me.justindevb.replay.benchmark.ReplayBenchmarkReportWriter;
 import me.justindevb.replay.benchmark.ReplayBenchmarkService;
 import me.justindevb.replay.config.ReplayConfigManager;
 import me.justindevb.replay.config.ReplayConfigSetting;
+import me.justindevb.replay.debug.ReplayDebugCommand;
 import me.justindevb.replay.export.ReplayExportCommand;
 import me.justindevb.replay.listeners.PacketEventsListener;
 import me.justindevb.replay.util.ReplayCache;
@@ -60,7 +61,8 @@ public class Replay extends JavaPlugin {
         replayBenchmarkService = createReplayBenchmarkService();
         ReplayCommand replayCommand = new ReplayCommand(manager,
             new ReplayBenchmarkCommand(replayBenchmarkService, foliaLib, getLogger()),
-            new ReplayExportCommand(manager, foliaLib, getLogger()));
+            new ReplayExportCommand(manager, foliaLib, getLogger()),
+            new ReplayDebugCommand(this, manager, foliaLib, getLogger()));
 
         PluginCommand cmd = getCommand("replay");
         if (cmd != null) {

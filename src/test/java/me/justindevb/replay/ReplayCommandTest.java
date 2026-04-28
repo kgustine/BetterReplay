@@ -2,6 +2,7 @@ package me.justindevb.replay;
 
 import me.justindevb.replay.api.ReplayManager;
 import me.justindevb.replay.benchmark.ReplayBenchmarkCommand;
+import me.justindevb.replay.debug.ReplayDebugCommand;
 import me.justindevb.replay.export.ReplayExportCommand;
 import org.bukkit.Bukkit;
 import org.bukkit.command.Command;
@@ -26,6 +27,7 @@ class ReplayCommandTest {
     @Mock private ReplayManager replayManager;
     @Mock private ReplayBenchmarkCommand replayBenchmarkCommand;
     @Mock private ReplayExportCommand replayExportCommand;
+    @Mock private ReplayDebugCommand replayDebugCommand;
     @Mock private Player player;
     @Mock private Command command;
 
@@ -33,7 +35,7 @@ class ReplayCommandTest {
 
     @BeforeEach
     void setUp() {
-        replayCommand = new ReplayCommand(replayManager, replayBenchmarkCommand, replayExportCommand);
+        replayCommand = new ReplayCommand(replayManager, replayBenchmarkCommand, replayExportCommand, replayDebugCommand);
     }
 
     // ── Non-player sender ─────────────────────────────────────
@@ -67,6 +69,18 @@ class ReplayCommandTest {
 
         assertTrue(result);
         verify(replayExportCommand).handle(consoleSender, new String[]{"export", "demo"});
+        verify(consoleSender, never()).sendMessage("Must be a player to execute this command");
+    }
+
+    @Test
+    void debugSubcommand_canRunFromConsole() {
+        org.bukkit.command.CommandSender consoleSender = mock(org.bukkit.command.CommandSender.class);
+        when(replayDebugCommand.handle(consoleSender, new String[]{"debug", "dump", "demo"})).thenReturn(true);
+
+        boolean result = replayCommand.onCommand(consoleSender, command, "replay", new String[]{"debug", "dump", "demo"});
+
+        assertTrue(result);
+        verify(replayDebugCommand).handle(consoleSender, new String[]{"debug", "dump", "demo"});
         verify(consoleSender, never()).sendMessage("Must be a player to execute this command");
     }
 
@@ -286,6 +300,7 @@ class ReplayCommandTest {
             assertFalse(completions.contains("play"));
             assertFalse(completions.contains("export"));
             assertFalse(completions.contains("benchmark"));
+            assertFalse(completions.contains("debug"));
         }
 
         @Test
@@ -304,6 +319,15 @@ class ReplayCommandTest {
             List<String> completions = replayCommand.onTabComplete(player, command, "replay", new String[]{"benchmark", "r"});
 
             assertEquals(List.of("run"), completions);
+        }
+
+        @Test
+        void debugPrefix_delegatesTabCompletion() {
+            when(replayDebugCommand.tabComplete(player, new String[]{"debug", "d"})).thenReturn(List.of("dump"));
+
+            List<String> completions = replayCommand.onTabComplete(player, command, "replay", new String[]{"debug", "d"});
+
+            assertEquals(List.of("dump"), completions);
         }
 
         @Test

@@ -3,6 +3,8 @@ package me.justindevb.replay.storage.binary;
 import com.google.gson.Gson;
 import me.justindevb.replay.recording.TimelineEvent;
 import me.justindevb.replay.storage.ReplayFormat;
+import me.justindevb.replay.storage.ReplayInspection;
+import me.justindevb.replay.storage.ReplayInspectionBuilder;
 import me.justindevb.replay.storage.ReplayIndexedTimeline;
 import me.justindevb.replay.storage.ReplayStorageCodec;
 import me.justindevb.replay.util.VersionUtil;
@@ -92,6 +94,31 @@ public final class BinaryReplayStorageCodec implements ReplayStorageCodec {
     @Override
     public List<TimelineEvent> decodeTimeline(byte[] storedBytes, String runningVersion) throws IOException {
         return openReplay(storedBytes, runningVersion).timeline();
+    }
+
+    @Override
+    public ReplayInspection inspectReplay(String replayName, byte[] storedBytes, String runningVersion) throws IOException {
+        ArchiveEntries archiveEntries = readArchiveEntries(storedBytes);
+        BinaryReplayManifest manifest = parseManifest(archiveEntries.manifestBytes());
+        validateManifest(manifest, archiveEntries.replayBytes(), runningVersion);
+
+        byte[] payload = decompress(archiveEntries.replayBytes());
+        validatePayloadHeader(payload);
+        ParsedPayload parsedPayload = parsePayload(payload);
+        LazyTimeline timeline = new LazyTimeline(payload, parsedPayload.events(), parsedPayload.stringTable(), parsedPayload.tickIndex());
+
+        return ReplayInspectionBuilder.build(
+                replayName,
+                format(),
+                storedBytes.length,
+                archiveEntries.replayBytes().length,
+                payload.length,
+                manifest.recordingStartedAtEpochMillis(),
+                manifest.recordedWithVersion(),
+                manifest.minimumViewerVersion(),
+                parsedPayload.indexLoaded(),
+                parsedPayload.tickIndex().size(),
+                timeline);
     }
 
     @Override

@@ -6,6 +6,7 @@ import com.tcoded.folialib.wrapper.task.WrappedTask;
 import io.papermc.paper.plugin.configuration.PluginMeta;
 import me.justindevb.replay.Replay;
 import me.justindevb.replay.api.ReplayExportQuery;
+import me.justindevb.replay.debug.ReplayDumpQuery;
 import me.justindevb.replay.recording.TimelineEvent;
 import me.justindevb.replay.storage.binary.BinaryReplayStorageCodec;
 import org.bukkit.configuration.file.FileConfiguration;
@@ -33,6 +34,7 @@ import java.util.logging.Logger;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -166,6 +168,41 @@ class MySQLReplayStorageTest {
         assertEquals(2, filtered.size());
         assertEquals(5, filtered.get(0).tick());
         assertEquals(10, filtered.get(1).tick());
+    }
+
+    @Test
+    void getReplayInfo_returnsTimestampCountsAndSizes() throws Exception {
+        byte[] archive = new BinaryReplayStorageCodec().finalizeReplay("info", sampleTimeline(), "1.4.0", 123456789L);
+        when(selectResultSet.next()).thenReturn(true);
+        when(selectResultSet.getBytes("data")).thenReturn(archive);
+
+        ReplayInspection info = storage.getReplayInfo("info").get();
+
+        assertNotNull(info);
+        assertEquals(3, info.recordCount());
+        assertEquals(0, info.startTick());
+        assertEquals(10, info.endTick());
+        assertEquals(10, info.durationTicks());
+        assertEquals(123456789L, info.recordingStartedAtEpochMillis());
+        assertTrue(info.storedBytes() > 0);
+        assertTrue(info.compressedPayloadBytes() > 0);
+        assertTrue(info.decompressedPayloadBytes() > info.compressedPayloadBytes());
+        assertTrue(info.indexedPayload());
+    }
+
+    @Test
+    void dumpUsesTickRangeAndWritesToPluginDumpFolder() throws Exception {
+        byte[] archive = new BinaryReplayStorageCodec().finalizeReplay("dump-filtered", sampleTimeline(), "1.4.0");
+        when(selectResultSet.next()).thenReturn(true);
+        when(selectResultSet.getBytes("data")).thenReturn(archive);
+
+        File dumped = storage.getReplayDumpFile("dump-filtered", new ReplayDumpQuery(5, 10)).get();
+        String dumpText = Files.readString(dumped.toPath());
+
+        assertEquals(new File(tempDir, "dumps").getCanonicalFile(), dumped.getParentFile().getCanonicalFile());
+        assertTrue(dumpText.contains("[tick=5]"));
+        assertTrue(dumpText.contains("[tick=10]"));
+        assertFalse(dumpText.contains("[tick=0]"));
     }
 
     private static List<TimelineEvent> sampleTimeline() {

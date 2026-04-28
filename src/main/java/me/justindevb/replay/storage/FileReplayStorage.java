@@ -2,6 +2,7 @@ package me.justindevb.replay.storage;
 
 import me.justindevb.replay.Replay;
 import me.justindevb.replay.api.ReplayExportQuery;
+import me.justindevb.replay.debug.ReplayDumpQuery;
 import me.justindevb.replay.recording.TimelineEvent;
 import me.justindevb.replay.storage.binary.BinaryReplayFormat;
 import me.justindevb.replay.storage.binary.BinaryReplayStorageCodec;
@@ -21,6 +22,7 @@ public class FileReplayStorage implements ReplayStorage {
     private final ReplayStorageCodec saveCodec;
     private final ReplayFormatDetector formatDetector;
     private final ReplayExporter replayExporter;
+    private final ReplayDumpWriter replayDumpWriter;
 
     public FileReplayStorage(Replay replay) {
         this(replay, new BinaryReplayStorageCodec(), defaultFormatDetector());
@@ -35,6 +37,7 @@ public class FileReplayStorage implements ReplayStorage {
         this.saveCodec = saveCodec;
         this.formatDetector = formatDetector;
         this.replayExporter = new ReplayExporter(new File(replay.getDataFolder(), "exports"));
+        this.replayDumpWriter = new ReplayDumpWriter(new File(replay.getDataFolder(), "dumps"));
         this.replayFolder = new File(replay.getDataFolder(), "replays");
         if (!replayFolder.exists())
             replayFolder.mkdirs();
@@ -198,6 +201,42 @@ public class FileReplayStorage implements ReplayStorage {
                         replay.getPluginMeta().getVersion());
             } catch (IOException e) {
                 throw new RuntimeException("Failed to export replay file " + name, e);
+            }
+        });
+    }
+
+    @Override
+    public CompletableFuture<ReplayInspection> getReplayInfo(String name) {
+        return CompletableFuture.supplyAsync(() -> {
+            File file = resolveExisting(name);
+            if (file == null || !file.isFile()) {
+                return null;
+            }
+
+            try {
+                byte[] bytes = Files.readAllBytes(file.toPath());
+                ReplayStorageCodec codec = formatDetector.detectCodec(file.getName(), bytes);
+                return codec.inspectReplay(name, bytes, replay.getPluginMeta().getVersion());
+            } catch (IOException e) {
+                throw new RuntimeException("Failed to inspect replay file " + name, e);
+            }
+        });
+    }
+
+    @Override
+    public CompletableFuture<File> getReplayDumpFile(String name, ReplayDumpQuery query) {
+        return CompletableFuture.supplyAsync(() -> {
+            File file = resolveExisting(name);
+            if (file == null || !file.isFile()) {
+                return null;
+            }
+
+            try {
+                byte[] bytes = Files.readAllBytes(file.toPath());
+                ReplayStorageCodec codec = formatDetector.detectCodec(file.getName(), bytes);
+                return replayDumpWriter.writeDump(name, codec.decodeTimeline(bytes, replay.getPluginMeta().getVersion()), query);
+            } catch (IOException e) {
+                throw new RuntimeException("Failed to dump replay file " + name, e);
             }
         });
     }
