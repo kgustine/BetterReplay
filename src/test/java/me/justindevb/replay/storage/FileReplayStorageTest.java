@@ -246,6 +246,40 @@ class FileReplayStorageTest {
     }
 
     @Test
+    void prefersBinaryArchiveWhenLegacyJsonAndBrBothExist() throws Exception {
+        File replayDir = new File(tempDir, "replays");
+        replayDir.mkdirs();
+
+        byte[] legacyJson = new JsonReplayStorageCodec().encodeTimeline(List.of(new TimelineEvent.PlayerQuit(0, "legacy")), "1.4.0");
+        Files.write(new File(replayDir, "mixed.json").toPath(), legacyJson);
+
+        byte[] archive = new BinaryReplayStorageCodec().finalizeReplay("mixed", sampleTimeline(), "1.4.0");
+        Files.write(new File(replayDir, "mixed.br").toPath(), archive);
+
+        List<TimelineEvent> loaded = storage.loadReplay("mixed").get();
+
+        assertNotNull(loaded);
+        assertEquals(3, loaded.size());
+        assertEquals("uuid-1", loaded.get(0).uuid());
+    }
+
+    @Test
+    void listsMixedLegacyAndBinaryReplayOnlyOnce() throws Exception {
+        File replayDir = new File(tempDir, "replays");
+        replayDir.mkdirs();
+
+        byte[] legacyJson = new JsonReplayStorageCodec().encodeTimeline(List.of(new TimelineEvent.PlayerQuit(0, "legacy")), "1.4.0");
+        Files.write(new File(replayDir, "mixed.json").toPath(), legacyJson);
+
+        byte[] archive = new BinaryReplayStorageCodec().finalizeReplay("mixed", sampleTimeline(), "1.4.0");
+        Files.write(new File(replayDir, "mixed.br").toPath(), archive);
+
+        List<String> names = storage.listReplays().get();
+
+        assertEquals(1, names.stream().filter("mixed"::equals).count());
+    }
+
+    @Test
     void exportMatchesBinaryArchiveStoredOnDisk() throws Exception {
         storage.saveReplay("export-eq", sampleTimeline()).get();
 

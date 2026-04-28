@@ -11,6 +11,7 @@ import me.justindevb.replay.util.io.ReplayCompressor;
 import java.io.*;
 import java.nio.file.Files;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 
@@ -51,12 +52,12 @@ public class FileReplayStorage implements ReplayStorage {
      * Returns null when neither file exists.
      */
     private File resolveExisting(String name) {
+        File binary = new File(replayFolder, name + BinaryReplayFormat.FILE_EXTENSION);
+        if (binary.exists()) return binary;
         File compressed = new File(replayFolder, name + JsonReplayStorageCodec.EXT_COMPRESSED);
         if (compressed.exists()) return compressed;
         File plain = new File(replayFolder, name + JsonReplayStorageCodec.EXT_UNCOMPRESSED);
         if (plain.exists()) return plain;
-        File binary = new File(replayFolder, name + BinaryReplayFormat.FILE_EXTENSION);
-        if (binary.exists()) return binary;
         File preferred = new File(replayFolder, name + saveCodec.fileExtension(isCompressionEnabled()));
         if (preferred.exists()) return preferred;
         return null;
@@ -124,7 +125,7 @@ public class FileReplayStorage implements ReplayStorage {
                             || n.endsWith(BinaryReplayFormat.FILE_EXTENSION)
                             || n.endsWith(saveCodec.fileExtension(false))
                             || n.endsWith(saveCodec.fileExtension(true)));
-            List<String> names = new ArrayList<>();
+            LinkedHashSet<String> names = new LinkedHashSet<>();
             if (files != null) {
                 for (File f : files) {
                     String n = f.getName();
@@ -134,7 +135,7 @@ public class FileReplayStorage implements ReplayStorage {
                     }
                 }
             }
-            return names;
+            return new ArrayList<>(names);
         });
     }
 

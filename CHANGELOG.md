@@ -22,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Phase 5 binary replay loading with `.br` archive detection, manifest version gates, heap decompression, lazy indexed event decode, and seek support from finalized checkpoints
 - Phase 6 backend integration with `.br` saves for file and MySQL storage, MySQL `LONGBLOB` migration, and mixed JSON/binary backend compatibility coverage
 - Phase 7 filtered replay export with `ReplayExportQuery`, player and tick-range filters, `player=all` defaults, and binary archive exports built from lazy indexed scans
+- Phase 8 legacy-compatibility prep keeps JSON replay loading during the transition, prefers `.br` when mixed file payloads coexist, and documents JSON support as temporary compatibility slated for later removal
 
 ### Fixed
 - `activeSessions` in `RecorderManager` changed to `ConcurrentHashMap` to prevent `ConcurrentModificationException` (#33)

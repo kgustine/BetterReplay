@@ -94,11 +94,11 @@ Valid values for `General.Storage-Type` are:
 - `file`
   - Stores replay data under the plugin data folder.
   - New saves now write finalized binary `.br` archives.
-  - The loader still auto-detects both legacy JSON payloads and finalized binary `.br` archives through `ReplayStorageCodec`.
+  - The loader still auto-detects both legacy JSON payloads and finalized binary `.br` archives through `ReplayStorageCodec` during the transition period.
 - `mysql`
   - Stores replay data in a MySQL table (`replays`) using the configured `General.MySQL.*` values.
   - New saves now store finalized binary `.br` archives as blob data.
-  - The loader still auto-detects both legacy JSON payloads and finalized binary `.br` archives.
+  - The loader still auto-detects both legacy JSON payloads and finalized binary `.br` archives during the transition period.
 
 These values should be lowercase as shown above.
 
@@ -134,6 +134,7 @@ Notes:
 - If Storage-Type is invalid, plugin falls back to file storage.
 - MySQL replay names are stored in a VARCHAR(64) primary key column.
 - Binary `.br` payloads require the replay data column to be `LONGBLOB`; the plugin now widens `data` automatically during storage initialization.
+- Legacy JSON replay support is temporary compatibility only and is planned for removal in a later version; new recordings should stay on `.br`.
 
 ## Build from source
 

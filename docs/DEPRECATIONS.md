@@ -46,6 +46,7 @@ JSON replay storage is being phased out because it is materially worse than the 
 - new recordings should be written in `.br` format
 - existing JSON replays remain readable during the transition period
 - BetterReplay should support both readers temporarily so older replay data is not immediately lost
+- when both legacy JSON and `.br` payloads exist for the same replay name, BetterReplay should prefer the `.br` archive
 
 ### Migration policy
 
@@ -66,6 +67,7 @@ Until JSON support is removed:
 
 - loaders must detect whether a replay is JSON or `.br`
 - file and MySQL backends may contain mixed replay formats
+- file storage should resolve mixed duplicates toward `.br` and avoid duplicate replay names in listings
 - documentation should describe JSON support as legacy compatibility, not the forward path
 
 After JSON support is removed:
