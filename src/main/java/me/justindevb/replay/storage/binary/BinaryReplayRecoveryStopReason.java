@@ -5,8 +5,10 @@ package me.justindevb.replay.storage.binary;
  */
 public enum BinaryReplayRecoveryStopReason {
     CLEAN_EOF,
+    TRUNCATED_HEADER,
     TRUNCATED_RECORD_LENGTH,
     TRUNCATED_RECORD,
     CHECKSUM_MISMATCH,
+    MALFORMED_HEADER,
     MALFORMED_RECORD
 }

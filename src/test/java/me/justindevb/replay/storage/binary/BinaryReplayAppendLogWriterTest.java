@@ -12,6 +12,8 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class BinaryReplayAppendLogWriterTest {
 
+    private static final long RECORDING_STARTED_AT = 1_700_000_000_000L;
+
     @TempDir
     Path tempDir;
 
@@ -20,7 +22,7 @@ class BinaryReplayAppendLogWriterTest {
         Path path = tempDir.resolve("multi.appendlog");
         BinaryReplayAppendLogReader reader = new BinaryReplayAppendLogReader();
 
-        try (BinaryReplayAppendLogWriter writer = new BinaryReplayAppendLogWriter(path)) {
+        try (BinaryReplayAppendLogWriter writer = new BinaryReplayAppendLogWriter(path, RECORDING_STARTED_AT)) {
             writer.append(new TimelineEvent.PlayerQuit(0, "uuid-1"));
             writer.append(new TimelineEvent.SprintToggle(5, "uuid-1", true));
             writer.append(new TimelineEvent.BlockBreakStage(8, null, "world", 1, 2, 3, 4));
@@ -40,7 +42,7 @@ class BinaryReplayAppendLogWriterTest {
         Path path = tempDir.resolve("reuse.appendlog");
         BinaryReplayAppendLogReader reader = new BinaryReplayAppendLogReader();
 
-        try (BinaryReplayAppendLogWriter writer = new BinaryReplayAppendLogWriter(path)) {
+        try (BinaryReplayAppendLogWriter writer = new BinaryReplayAppendLogWriter(path, RECORDING_STARTED_AT)) {
             writer.append(new TimelineEvent.PlayerQuit(0, "shared-uuid"));
             writer.append(new TimelineEvent.PlayerQuit(1, "shared-uuid"));
             writer.flush();
@@ -59,7 +61,7 @@ class BinaryReplayAppendLogWriterTest {
         Path path = tempDir.resolve("crc.appendlog");
         BinaryReplayAppendLogReader reader = new BinaryReplayAppendLogReader();
 
-        try (BinaryReplayAppendLogWriter writer = new BinaryReplayAppendLogWriter(path)) {
+        try (BinaryReplayAppendLogWriter writer = new BinaryReplayAppendLogWriter(path, RECORDING_STARTED_AT)) {
             writer.append(new TimelineEvent.PlayerQuit(0, "uuid-1"));
             writer.flush();
         }
@@ -80,8 +82,8 @@ class BinaryReplayAppendLogWriterTest {
         Path secondPath = tempDir.resolve("second.appendlog");
         BinaryReplayAppendLogReader reader = new BinaryReplayAppendLogReader();
 
-        try (BinaryReplayAppendLogWriter first = new BinaryReplayAppendLogWriter(firstPath);
-             BinaryReplayAppendLogWriter second = new BinaryReplayAppendLogWriter(secondPath)) {
+           try (BinaryReplayAppendLogWriter first = new BinaryReplayAppendLogWriter(firstPath, RECORDING_STARTED_AT);
+               BinaryReplayAppendLogWriter second = new BinaryReplayAppendLogWriter(secondPath, RECORDING_STARTED_AT + 1)) {
             first.append(new TimelineEvent.PlayerQuit(0, "first"));
             second.append(new TimelineEvent.PlayerQuit(0, "second"));
             first.flush();
@@ -93,5 +95,21 @@ class BinaryReplayAppendLogWriterTest {
 
         assertEquals(List.of(new TimelineEvent.PlayerQuit(0, "first")), firstTimeline);
         assertEquals(List.of(new TimelineEvent.PlayerQuit(0, "second")), secondTimeline);
+    }
+
+    @Test
+    void persistsHeaderMetadataAheadOfRecords() throws Exception {
+        Path path = tempDir.resolve("header.appendlog");
+        BinaryReplayAppendLogReader reader = new BinaryReplayAppendLogReader();
+
+        try (BinaryReplayAppendLogWriter writer = new BinaryReplayAppendLogWriter(path, RECORDING_STARTED_AT)) {
+            writer.append(new TimelineEvent.PlayerQuit(0, "uuid-1"));
+            writer.flush();
+        }
+
+        BinaryReplayAppendLogRecovery recovery = reader.recover(path);
+
+        assertEquals(RECORDING_STARTED_AT, recovery.header().recordingStartedAtEpochMillis());
+        assertEquals(List.of(new TimelineEvent.PlayerQuit(0, "uuid-1")), recovery.timeline());
     }
 }

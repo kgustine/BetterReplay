@@ -25,6 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Phase 8 legacy-compatibility prep keeps JSON replay loading during the transition, prefers `.br` when mixed file payloads coexist, and documents JSON support as temporary compatibility slated for later removal
 - Hidden admin replay export command via `/replay export` with optional named player and tick-range filters
 - Hidden admin benchmark diagnostics via `/replay benchmark` with small/medium/large synthetic workloads and Markdown/JSON report output
+- Binary replay manifests now store `recordingStartedAtEpochMillis`, and append-log temp files now persist a fixed metadata header so crash-safe recovery preserves the original recording start time
 
 ### Fixed
 - `activeSessions` in `RecorderManager` changed to `ConcurrentHashMap` to prevent `ConcurrentModificationException` (#33)

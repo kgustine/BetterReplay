@@ -19,6 +19,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class BinaryReplayGoldenFileTest {
 
     private static final Gson GSON = new Gson();
+    private static final long MINIMAL_RECORDING_STARTED_AT = 1_700_000_000_000L;
     private final BinaryReplayStorageCodec codec = new BinaryReplayStorageCodec();
 
     @Test
@@ -57,6 +58,7 @@ class BinaryReplayGoldenFileTest {
         assertEquals(BinaryReplayFormat.FORMAT_VERSION, manifest.formatVersion());
         assertEquals("1.4.0", manifest.recordedWithVersion());
         assertEquals("1.4.0", manifest.minimumViewerVersion());
+        assertEquals(MINIMAL_RECORDING_STARTED_AT, manifest.recordingStartedAtEpochMillis());
         assertEquals(BinaryReplayFormat.PAYLOAD_CHECKSUM_ALGORITHM, manifest.payloadChecksumAlgorithm());
         assertNotNull(manifest.payloadChecksum());
     }

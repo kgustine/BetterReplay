@@ -9,6 +9,7 @@ public record BinaryReplayManifest(
         int formatVersion,
         String recordedWithVersion,
         String minimumViewerVersion,
+    long recordingStartedAtEpochMillis,
         String payloadChecksum,
         String payloadChecksumAlgorithm
 ) {
@@ -19,6 +20,9 @@ public record BinaryReplayManifest(
         }
         requireNonBlank(recordedWithVersion, "recordedWithVersion");
         requireNonBlank(minimumViewerVersion, "minimumViewerVersion");
+        if (recordingStartedAtEpochMillis <= 0) {
+            throw new IllegalArgumentException("recordingStartedAtEpochMillis must be positive");
+        }
         requireLowerHex(payloadChecksum, "payloadChecksum");
         requireNonBlank(payloadChecksumAlgorithm, "payloadChecksumAlgorithm");
     }
@@ -26,12 +30,14 @@ public record BinaryReplayManifest(
     public static BinaryReplayManifest createV1(
             String recordedWithVersion,
             String minimumViewerVersion,
+            long recordingStartedAtEpochMillis,
             String payloadChecksum
     ) {
         return new BinaryReplayManifest(
                 BinaryReplayFormat.FORMAT_VERSION,
                 recordedWithVersion,
                 minimumViewerVersion,
+                recordingStartedAtEpochMillis,
                 payloadChecksum,
                 BinaryReplayFormat.PAYLOAD_CHECKSUM_ALGORITHM
         );

@@ -191,6 +191,10 @@ Primary docs:
 - [docs/ARCHIVE_MANIFEST_SCHEMA.md](docs/ARCHIVE_MANIFEST_SCHEMA.md) - `manifest.json` field definitions and validation rules
 - [docs/DEPRECATIONS.md](docs/DEPRECATIONS.md) - planned feature and compatibility removals
 
+Binary replay note:
+- Finalized `.br` archives now store the recording start wall-clock timestamp in `manifest.json` as `recordingStartedAtEpochMillis`.
+- Active temp append-logs also write a fixed file header carrying the same timestamp so final saves can preserve it after crash-safe recovery.
+
 Planning docs:
 
 - [docs/planning](docs/planning) - design notes, comparisons, and implementation planning documents

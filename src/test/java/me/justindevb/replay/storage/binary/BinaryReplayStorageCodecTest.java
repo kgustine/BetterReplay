@@ -31,12 +31,14 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class BinaryReplayStorageCodecTest {
 
+    private static final long RECORDING_STARTED_AT = 1_700_000_000_000L;
+
     private final BinaryReplayStorageCodec codec = new BinaryReplayStorageCodec();
     private final Gson gson = new Gson();
 
     @Test
     void loadsValidBinaryReplayArchive() throws Exception {
-        byte[] archive = codec.finalizeReplay("valid", sampleTimeline(), "1.4.0");
+        byte[] archive = codec.finalizeReplay("valid", sampleTimeline(), "1.4.0", RECORDING_STARTED_AT);
 
         List<TimelineEvent> decoded = codec.decodeTimeline(archive, "1.4.0");
 
@@ -48,7 +50,7 @@ class BinaryReplayStorageCodecTest {
 
     @Test
     void rejectsReplaysThatRequireNewerViewerVersion() throws Exception {
-        byte[] archive = codec.finalizeReplay("versioned", sampleTimeline(), "1.4.0");
+        byte[] archive = codec.finalizeReplay("versioned", sampleTimeline(), "1.4.0", RECORDING_STARTED_AT);
         Map<String, byte[]> entries = readArchiveEntries(archive);
         BinaryReplayManifest manifest = gson.fromJson(new String(entries.get(BinaryReplayFormat.MANIFEST_ENTRY_NAME), StandardCharsets.UTF_8),
                 BinaryReplayManifest.class);
@@ -57,6 +59,7 @@ class BinaryReplayStorageCodecTest {
                 manifest.formatVersion(),
                 manifest.recordedWithVersion(),
                 "9.0.0",
+                manifest.recordingStartedAtEpochMillis(),
                 manifest.payloadChecksum(),
                 manifest.payloadChecksumAlgorithm())).getBytes(StandardCharsets.UTF_8));
 
@@ -73,7 +76,7 @@ class BinaryReplayStorageCodecTest {
             timeline.add(new TimelineEvent.PlayerQuit(tick, "uuid-" + tick));
         }
 
-        byte[] archive = codec.finalizeReplay("seek", timeline, "1.4.0");
+        byte[] archive = codec.finalizeReplay("seek", timeline, "1.4.0", RECORDING_STARTED_AT);
         BinaryReplayStorageCodec.ParsedBinaryReplay replay = codec.openReplay(archive, "1.4.0");
 
         int index = replay.timeline().findEventIndexAtOrAfterTick(90);
@@ -84,7 +87,7 @@ class BinaryReplayStorageCodecTest {
 
     @Test
     void fallsBackToScanningWhenTickIndexIsAbsent() throws Exception {
-        byte[] archive = codec.finalizeReplay("fallback", sampleTimeline(), "1.4.0");
+        byte[] archive = codec.finalizeReplay("fallback", sampleTimeline(), "1.4.0", RECORDING_STARTED_AT);
         Map<String, byte[]> entries = readArchiveEntries(archive);
         byte[] payload = decompress(entries.get(BinaryReplayFormat.REPLAY_ENTRY_NAME));
         long indexOffset = ByteBuffer.wrap(payload, payload.length - BinaryReplayFormat.INDEX_SECTION_FOOTER_BYTES,
@@ -105,7 +108,7 @@ class BinaryReplayStorageCodecTest {
 
     @Test
     void failsOnUnknownRecordTags() throws Exception {
-        byte[] archive = codec.finalizeReplay("unknown-tag", sampleTimeline(), "1.4.0");
+        byte[] archive = codec.finalizeReplay("unknown-tag", sampleTimeline(), "1.4.0", RECORDING_STARTED_AT);
         Map<String, byte[]> entries = readArchiveEntries(archive);
         byte[] payload = decompress(entries.get(BinaryReplayFormat.REPLAY_ENTRY_NAME));
 
@@ -185,6 +188,7 @@ class BinaryReplayStorageCodecTest {
                 manifest.formatVersion(),
                 manifest.recordedWithVersion(),
                 manifest.minimumViewerVersion(),
+            manifest.recordingStartedAtEpochMillis(),
                 "%08x".formatted(crc32c.getValue()),
                 manifest.payloadChecksumAlgorithm());
         entries.put(BinaryReplayFormat.MANIFEST_ENTRY_NAME, gson.toJson(updated).getBytes(StandardCharsets.UTF_8));

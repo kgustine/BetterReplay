@@ -8,6 +8,9 @@ import me.justindevb.replay.recording.RecordingEventHandler;
 import me.justindevb.replay.recording.RecordingPacketHandler;
 import me.justindevb.replay.recording.TimelineBuilder;
 import me.justindevb.replay.recording.TimelineEvent;
+import me.justindevb.replay.storage.ReplaySaveRequest;
+import me.justindevb.replay.storage.binary.BinaryReplayAppendLogHeader;
+import me.justindevb.replay.storage.binary.BinaryReplayAppendLogRecovery;
 import me.justindevb.replay.storage.binary.BinaryReplayAppendLogReader;
 import me.justindevb.replay.storage.binary.BinaryReplayAppendLogWriter;
 import org.bukkit.Bukkit;
@@ -35,6 +38,7 @@ public class RecordingSession {
     private final Replay replay;
     private final String name;
     private final File appendLogFile;
+    private final long recordingStartedAtEpochMillis;
 
     private final EntityTracker tracker;
     private final TimelineBuilder builder;
@@ -54,11 +58,14 @@ public class RecordingSession {
         this.name = name;
         this.durationTicks = durationSeconds > 0 ? durationSeconds * 20 : -1;
         this.replay = Replay.getInstance();
+        this.recordingStartedAtEpochMillis = System.currentTimeMillis();
         this.appendLogFile = new File(folder, "replays/.tmp/" + name + ".appendlog");
         this.appendLogReader = new BinaryReplayAppendLogReader();
 
         try {
-            this.appendLogWriter = new BinaryReplayAppendLogWriter(appendLogFile.toPath());
+            this.appendLogWriter = new BinaryReplayAppendLogWriter(
+                    appendLogFile.toPath(),
+                    new BinaryReplayAppendLogHeader(recordingStartedAtEpochMillis));
         } catch (IOException e) {
             throw new RuntimeException("Failed to create recording append-log for " + name, e);
         }
@@ -175,9 +182,12 @@ public class RecordingSession {
             return;
         }
 
-        List<TimelineEvent> timeline;
+        BinaryReplayAppendLogRecovery recovery;
         try {
-            timeline = appendLogReader.readTimeline(appendLogFile.toPath());
+            recovery = appendLogReader.recover(appendLogFile.toPath());
+            if (!recovery.isComplete()) {
+                throw new IOException("Append-log ended with " + recovery.stopReason());
+            }
         } catch (IOException e) {
             replay.getLogger().log(java.util.logging.Level.SEVERE, "Failed to read recording temp log: " + name, e);
             return;
@@ -185,7 +195,11 @@ public class RecordingSession {
 
         deleteAppendLog();
 
-        replay.getReplayStorage().saveReplay(name, timeline)
+        long recoveredStart = recovery.header().recordingStartedAtEpochMillis() > 0
+            ? recovery.header().recordingStartedAtEpochMillis()
+            : recordingStartedAtEpochMillis;
+
+        replay.getReplayStorage().saveReplay(name, new ReplaySaveRequest(recovery.timeline(), recoveredStart))
                 .thenCompose(v ->
                         replay.getReplayStorage().listReplays()
                 )

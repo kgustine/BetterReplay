@@ -77,6 +77,19 @@ public final class BinaryReplayStorageCodec implements ReplayStorageCodec {
     }
 
     @Override
+    public byte[] finalizeReplay(
+            String replayName,
+            List<TimelineEvent> timeline,
+            String pluginVersion,
+            Long recordingStartedAtEpochMillis
+    ) throws IOException {
+        if (recordingStartedAtEpochMillis == null) {
+            return finalizer.finalizeReplay(replayName, timeline, pluginVersion);
+        }
+        return finalizer.finalizeReplay(replayName, timeline, pluginVersion, recordingStartedAtEpochMillis);
+    }
+
+    @Override
     public List<TimelineEvent> decodeTimeline(byte[] storedBytes, String runningVersion) throws IOException {
         return openReplay(storedBytes, runningVersion).timeline();
     }

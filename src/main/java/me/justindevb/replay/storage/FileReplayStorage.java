@@ -61,8 +61,12 @@ public class FileReplayStorage implements ReplayStorage {
         return null;
     }
 
-    private byte[] encodeForStorage(List<TimelineEvent> timeline) throws IOException {
-        byte[] payload = saveCodec.encodeTimeline(timeline, replay.getPluginMeta().getVersion());
+    private byte[] encodeForStorage(String name, ReplaySaveRequest request) throws IOException {
+        byte[] payload = saveCodec.finalizeReplay(
+                name,
+                request.timeline(),
+                replay.getPluginMeta().getVersion(),
+                request.recordingStartedAtEpochMillis());
         return usesCodecCompression() ? ReplayCompressor.compress(new String(payload, java.nio.charset.StandardCharsets.UTF_8)) : payload;
     }
 
@@ -77,12 +81,17 @@ public class FileReplayStorage implements ReplayStorage {
 
     @Override
     public CompletableFuture<Void> saveReplay(String name, List<TimelineEvent> timeline) {
+        return saveReplay(name, new ReplaySaveRequest(timeline));
+    }
+
+    @Override
+    public CompletableFuture<Void> saveReplay(String name, ReplaySaveRequest request) {
         return CompletableFuture.runAsync(() -> {
             try {
                 boolean compressionEnabled = usesCodecCompression();
                 String extension = saveCodec.fileExtension(compressionEnabled);
                 File file = new File(replayFolder, name + extension);
-                Files.write(file.toPath(), encodeForStorage(timeline));
+                Files.write(file.toPath(), encodeForStorage(name, request));
                 removeLegacyJsonVariants(name, extension);
             } catch (IOException e) {
                 throw new RuntimeException("Failed to save replay " + name, e);

@@ -11,6 +11,10 @@ public interface ReplayStorage {
 
     CompletableFuture<Void> saveReplay(String name, List<TimelineEvent> timeline);
 
+    default CompletableFuture<Void> saveReplay(String name, ReplaySaveRequest request) {
+        return saveReplay(name, request.timeline());
+    }
+
     CompletableFuture<List<TimelineEvent>> loadReplay(String name);
 
     CompletableFuture<List<String>> listReplays();

@@ -11,6 +11,7 @@ For the archive manifest fields specifically, see [ARCHIVE_MANIFEST_SCHEMA.md](A
 This specification covers:
 
 - the `.br` archive layout
+- the append-log temp file header used during recording and crash recovery
 - the compressed replay payload stored in `replay.bin`
 - event record framing
 - string-table usage
@@ -49,6 +50,9 @@ The `replay.bin` entry contains the finalized replay payload:
 
 The v1 implementation stores `replay.bin` as a single LZ4 frame.
 
+During active recording, BetterReplay first writes an append-only temp file under `replays/.tmp/`.
+That append-log has its own fixed file header so metadata needed during crash recovery is persisted before any framed records are appended.
+
 ## Archive Layout
 
 The `.br` file is a ZIP-style archive whose entries are stored using `STORE` rather than a second archive-level compression pass.
@@ -68,6 +72,42 @@ The `.br` file is a ZIP-style archive whose entries are stored using `STORE` rat
 | `meta/` | Future auxiliary metadata entries |
 
 These prefixes are reserved in v1 but are not required to exist.
+
+## Append-Log Temp File
+
+The recording path writes an append-only temp file before finalizing a `.br` archive.
+
+This append-log exists to support:
+
+- low-overhead sequential writes while recording
+- crash-safe recovery of the longest valid record prefix
+- persistence of replay-level metadata needed before final archive creation
+
+### Append-log v1 file layout
+
+1. fixed append-log header
+2. framed record stream
+
+### Fixed append-log header
+
+The header is written once when the temp file is created and flushed immediately.
+
+| Field | Width | Encoding | v1 value |
+|-------|-------|----------|----------|
+| magic | 4 bytes | raw ASCII bytes | `BRAL` |
+| header version | 1 byte | unsigned byte | `0x01` |
+| flags | 1 byte | unsigned byte | `0x00` |
+| reserved | 2 bytes | zero-filled | `0x00 0x00` |
+| `recordingStartedAtEpochMillis` | 8 bytes | little-endian signed int64 | Unix epoch milliseconds |
+
+Total append-log header size: `16` bytes.
+
+### Append-log header rules
+
+- the header must be present before any framed record bytes
+- the recording start timestamp must be preserved when finalizing a recovered append-log after a crash
+- malformed or truncated headers are a hard recovery failure
+- future append-log metadata should be added by extending this header rather than embedding replay-level metadata in normal event records
 
 ## Replay Payload Model
 

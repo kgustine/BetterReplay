@@ -26,6 +26,7 @@ at the root of the `.br` archive.
 | `formatVersion` | integer | Yes | Binary structure/schema compatibility version |
 | `recordedWithVersion` | string | Yes | Plugin version that created the replay |
 | `minimumViewerVersion` | string | Yes | Minimum plugin version allowed to load/play the replay |
+| `recordingStartedAtEpochMillis` | integer | Yes | Wall-clock recording start time in Unix epoch milliseconds |
 | `payloadChecksum` | string | Yes | Whole-payload checksum for `replay.bin` |
 | `payloadChecksumAlgorithm` | string | Yes | Name of the checksum algorithm used for `payloadChecksum` |
 
@@ -113,6 +114,34 @@ Example:
 "payloadChecksum": "7d8f8f2b"
 ```
 
+### `recordingStartedAtEpochMillis`
+
+Type:
+
+- integer
+
+Meaning:
+
+- Unix epoch millisecond timestamp captured when the recording session started
+- provides a replay-level wall-clock anchor for converting replay ticks back to approximate real time
+
+Usage:
+
+- consumers can derive an approximate timestamp for replay tick `t` with `recordingStartedAtEpochMillis + t * 50`
+- this is a logical 20 TPS time anchor; it does not preserve per-tick wall-clock drift during lag
+
+Rules:
+
+- must be a positive integer
+- must represent the original recording start time, not export time or playback time
+- writers should preserve this value when finalizing a recovered temp append-log after a crash
+
+Example:
+
+```json
+"recordingStartedAtEpochMillis": 1700000000000
+```
+
 ### `payloadChecksumAlgorithm`
 
 Type:
@@ -148,6 +177,7 @@ Example:
   "formatVersion": 1,
   "recordedWithVersion": "1.5.0-SNAPSHOT",
   "minimumViewerVersion": "1.5.0",
+  "recordingStartedAtEpochMillis": 1700000000000,
   "payloadChecksum": "7d8f8f2b",
   "payloadChecksumAlgorithm": "CRC32C"
 }
@@ -242,6 +272,7 @@ Recommended logged values:
 - `formatVersion`
 - `recordedWithVersion`
 - `minimumViewerVersion`
+- `recordingStartedAtEpochMillis`
 - `payloadChecksumAlgorithm`
 - the reason validation failed
 
@@ -254,7 +285,6 @@ Possible future additions include:
 - replay duration
 - tick count
 - player count summary
-- recording timestamp metadata
 - chunk payload presence flags
 - debug/export hints
 

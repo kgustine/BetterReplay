@@ -26,6 +26,15 @@ public interface ReplayStorageCodec extends ReplayFinalizer, ReplayArchiveReader
         return encodeTimeline(timeline, pluginVersion);
     }
 
+    default byte[] finalizeReplay(
+            String replayName,
+            List<TimelineEvent> timeline,
+            String pluginVersion,
+            Long recordingStartedAtEpochMillis
+    ) throws IOException {
+        return finalizeReplay(replayName, timeline, pluginVersion);
+    }
+
     List<TimelineEvent> decodeTimeline(byte[] storedBytes, String runningVersion) throws IOException;
 
     @Override

@@ -42,8 +42,12 @@ public class MySQLReplayStorage implements ReplayStorage {
         return saveCodec.supportsCompression();
     }
 
-    private byte[] encodeForStorage(List<TimelineEvent> timeline) throws IOException {
-        byte[] payload = saveCodec.encodeTimeline(timeline, replay.getPluginMeta().getVersion());
+    private byte[] encodeForStorage(String name, ReplaySaveRequest request) throws IOException {
+        byte[] payload = saveCodec.finalizeReplay(
+                name,
+                request.timeline(),
+                replay.getPluginMeta().getVersion(),
+                request.recordingStartedAtEpochMillis());
         return usesCodecCompression() ? ReplayCompressor.compress(new String(payload, java.nio.charset.StandardCharsets.UTF_8)) : payload;
     }
 
@@ -71,6 +75,11 @@ public class MySQLReplayStorage implements ReplayStorage {
 
     @Override
     public CompletableFuture<Void> saveReplay(String name, List<TimelineEvent> timeline) {
+        return saveReplay(name, new ReplaySaveRequest(timeline));
+    }
+
+    @Override
+    public CompletableFuture<Void> saveReplay(String name, ReplaySaveRequest request) {
         return CompletableFuture.runAsync(() -> {
             try (Connection conn = dataSource.getConnection();
                  PreparedStatement ps = conn.prepareStatement("""
@@ -79,7 +88,7 @@ public class MySQLReplayStorage implements ReplayStorage {
                  ON DUPLICATE KEY UPDATE data = VALUES(data)
              """)) {
 
-                byte[] data = encodeForStorage(timeline);
+                byte[] data = encodeForStorage(name, request);
 
                 ps.setString(1, name);
                 ps.setBytes(2, data);

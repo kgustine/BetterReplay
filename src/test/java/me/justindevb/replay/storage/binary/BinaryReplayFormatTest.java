@@ -18,6 +18,8 @@ class BinaryReplayFormatTest {
         assertEquals("meta/", BinaryReplayFormat.RESERVED_META_PREFIX);
         assertEquals(1, BinaryReplayFormat.FORMAT_VERSION);
         assertEquals("CRC32C", BinaryReplayFormat.PAYLOAD_CHECKSUM_ALGORITHM);
+        assertArrayEquals(new byte[] {'B', 'R', 'A', 'L'}, BinaryReplayFormat.appendLogMagicBytes());
+        assertEquals(16, BinaryReplayFormat.APPEND_LOG_HEADER_SIZE);
         assertArrayEquals(new byte[] {'B', 'R', 'P', 'L'}, BinaryReplayFormat.payloadMagicBytes());
         assertEquals("4252504c", BinaryReplayFormat.payloadMagicHex());
         assertEquals(8, BinaryReplayFormat.PAYLOAD_HEADER_SIZE);
@@ -82,22 +84,25 @@ class BinaryReplayFormatTest {
 
     @Test
     void createsV1ManifestWithCurrentDefaults() {
-        BinaryReplayManifest manifest = BinaryReplayManifest.createV1("1.4.0", "1.4.0", "7d8f8f2b");
+        BinaryReplayManifest manifest = BinaryReplayManifest.createV1("1.4.0", "1.4.0", 1_700_000_000_000L, "7d8f8f2b");
 
         assertEquals(BinaryReplayFormat.FORMAT_VERSION, manifest.formatVersion());
         assertEquals(BinaryReplayFormat.PAYLOAD_CHECKSUM_ALGORITHM, manifest.payloadChecksumAlgorithm());
         assertEquals("1.4.0", manifest.recordedWithVersion());
         assertEquals("1.4.0", manifest.minimumViewerVersion());
+        assertEquals(1_700_000_000_000L, manifest.recordingStartedAtEpochMillis());
         assertEquals("7d8f8f2b", manifest.payloadChecksum());
     }
 
     @Test
     void rejectsInvalidManifestFields() {
         assertThrows(IllegalArgumentException.class,
-                () -> new BinaryReplayManifest(0, "1.4.0", "1.4.0", "7d8f8f2b", "CRC32C"));
+            () -> new BinaryReplayManifest(0, "1.4.0", "1.4.0", 1_700_000_000_000L, "7d8f8f2b", "CRC32C"));
         assertThrows(IllegalArgumentException.class,
-                () -> new BinaryReplayManifest(1, " ", "1.4.0", "7d8f8f2b", "CRC32C"));
+            () -> new BinaryReplayManifest(1, " ", "1.4.0", 1_700_000_000_000L, "7d8f8f2b", "CRC32C"));
         assertThrows(IllegalArgumentException.class,
-                () -> new BinaryReplayManifest(1, "1.4.0", "1.4.0", "NOT_HEX", "CRC32C"));
+            () -> new BinaryReplayManifest(1, "1.4.0", "1.4.0", 0, "7d8f8f2b", "CRC32C"));
+        assertThrows(IllegalArgumentException.class,
+            () -> new BinaryReplayManifest(1, "1.4.0", "1.4.0", 1_700_000_000_000L, "NOT_HEX", "CRC32C"));
     }
 }

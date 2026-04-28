@@ -27,6 +27,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class BinaryReplayArchiveFinalizerTest {
 
+    private static final long RECORDING_STARTED_AT = 1_700_000_000_000L;
+
     private final BinaryReplayArchiveFinalizer finalizer = new BinaryReplayArchiveFinalizer();
     private final Gson gson = new Gson();
 
@@ -39,7 +41,7 @@ class BinaryReplayArchiveFinalizerTest {
                 new TimelineEvent.PlayerQuit(0, "uuid-1"),
                 new TimelineEvent.SprintToggle(55, "uuid-1", true));
 
-        byte[] archive = finalizer.finalizeReplay("clean", timeline, "1.4.0");
+        byte[] archive = finalizer.finalizeReplay("clean", timeline, "1.4.0", RECORDING_STARTED_AT);
         Map<String, byte[]> entries = readArchiveEntries(archive);
 
         assertTrue(entries.containsKey(BinaryReplayFormat.MANIFEST_ENTRY_NAME));
@@ -56,7 +58,7 @@ class BinaryReplayArchiveFinalizerTest {
                 new TimelineEvent.PlayerQuit(0, "uuid-1"),
                 new TimelineEvent.PlayerQuit(75, "uuid-2"));
 
-        byte[] archive = finalizer.finalizeReplay("index", timeline, "1.4.0");
+        byte[] archive = finalizer.finalizeReplay("index", timeline, "1.4.0", RECORDING_STARTED_AT);
         byte[] payload = decompress(readArchiveEntries(archive).get(BinaryReplayFormat.REPLAY_ENTRY_NAME));
         ParsedPayload parsedPayload = parsePayload(payload);
 
@@ -69,7 +71,7 @@ class BinaryReplayArchiveFinalizerTest {
     void validatesManifestChecksumAgainstStoredReplayBytes() throws Exception {
         List<TimelineEvent> timeline = List.of(new TimelineEvent.PlayerQuit(0, "uuid-1"));
 
-        byte[] archive = finalizer.finalizeReplay("checksum", timeline, "1.4.0");
+        byte[] archive = finalizer.finalizeReplay("checksum", timeline, "1.4.0", RECORDING_STARTED_AT);
         Map<String, byte[]> entries = readArchiveEntries(archive);
         BinaryReplayManifest manifest = gson.fromJson(new String(entries.get(BinaryReplayFormat.MANIFEST_ENTRY_NAME), StandardCharsets.UTF_8),
                 BinaryReplayManifest.class);
@@ -80,6 +82,7 @@ class BinaryReplayArchiveFinalizerTest {
 
         assertEquals("%08x".formatted(crc32c.getValue()), manifest.payloadChecksum());
         assertEquals(BinaryReplayFormat.PAYLOAD_CHECKSUM_ALGORITHM, manifest.payloadChecksumAlgorithm());
+        assertEquals(RECORDING_STARTED_AT, manifest.recordingStartedAtEpochMillis());
     }
 
     @Test
@@ -89,7 +92,7 @@ class BinaryReplayArchiveFinalizerTest {
             timeline.add(new TimelineEvent.PlayerQuit(tick, "uuid-" + tick));
         }
 
-        byte[] archive = finalizer.finalizeReplay("long", timeline, "1.4.0");
+        byte[] archive = finalizer.finalizeReplay("long", timeline, "1.4.0", RECORDING_STARTED_AT);
         ParsedPayload parsedPayload = parsePayload(decompress(readArchiveEntries(archive).get(BinaryReplayFormat.REPLAY_ENTRY_NAME)));
 
         assertEquals(List.of(0, 50, 100, 150, 200), parsedPayload.tickIndex().stream().map(BinaryTickIndexEntry::tick).toList());
@@ -102,7 +105,7 @@ class BinaryReplayArchiveFinalizerTest {
         Path path = tempDir.resolve("recovered.appendlog");
         BinaryReplayAppendLogReader reader = new BinaryReplayAppendLogReader();
 
-        try (BinaryReplayAppendLogWriter writer = new BinaryReplayAppendLogWriter(path)) {
+        try (BinaryReplayAppendLogWriter writer = new BinaryReplayAppendLogWriter(path, RECORDING_STARTED_AT)) {
             writer.append(new TimelineEvent.PlayerQuit(0, "uuid-1"));
             writer.append(new TimelineEvent.PlayerQuit(1, "uuid-2"));
             writer.flush();
@@ -117,6 +120,7 @@ class BinaryReplayArchiveFinalizerTest {
 
         assertFalse(entries.get(BinaryReplayFormat.REPLAY_ENTRY_NAME).length == 0);
         assertEquals(BinaryReplayRecoveryStopReason.TRUNCATED_RECORD, recovery.stopReason());
+        assertEquals(RECORDING_STARTED_AT, recovery.header().recordingStartedAtEpochMillis());
     }
 
     private static Map<String, byte[]> readArchiveEntries(byte[] archiveBytes) throws IOException {

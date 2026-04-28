@@ -20,6 +20,15 @@ public final class BinaryReplayFormat {
     public static final int FORMAT_VERSION = 1;
     public static final String PAYLOAD_CHECKSUM_ALGORITHM = "CRC32C";
 
+        public static final byte[] APPEND_LOG_MAGIC = new byte[] {'B', 'R', 'A', 'L'};
+        public static final int APPEND_LOG_HEADER_VERSION = 1;
+        public static final int APPEND_LOG_HEADER_FLAGS_NONE = 0;
+        public static final int APPEND_LOG_HEADER_SIZE = APPEND_LOG_MAGIC.length
+            + Byte.BYTES
+            + Byte.BYTES
+            + Short.BYTES
+            + Long.BYTES;
+
     public static final byte[] PAYLOAD_MAGIC = new byte[] {'B', 'R', 'P', 'L'};
     public static final int PAYLOAD_HEADER_VERSION_BYTES = 1;
     public static final int PAYLOAD_HEADER_FLAGS_BYTES = 1;
@@ -58,6 +67,10 @@ public final class BinaryReplayFormat {
 
     public static byte[] payloadMagicBytes() {
         return PAYLOAD_MAGIC.clone();
+    }
+
+    public static byte[] appendLogMagicBytes() {
+        return APPEND_LOG_MAGIC.clone();
     }
 
     public static byte[] indexSectionMagicBytes() {

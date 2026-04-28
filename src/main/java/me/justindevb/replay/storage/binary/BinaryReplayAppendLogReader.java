@@ -3,6 +3,7 @@ package me.justindevb.replay.storage.binary;
 import me.justindevb.replay.recording.TimelineEvent;
 
 import java.io.IOException;
+import java.nio.ByteBuffer;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -32,19 +33,47 @@ public final class BinaryReplayAppendLogReader {
 
     public BinaryReplayAppendLogRecovery recover(Path path) throws IOException {
         if (!Files.exists(path)) {
-            return new BinaryReplayAppendLogRecovery(List.of(), List.of(), List.of(), BinaryReplayRecoveryStopReason.CLEAN_EOF, 0);
+            return new BinaryReplayAppendLogRecovery(
+                    BinaryReplayAppendLogHeader.empty(),
+                    List.of(),
+                    List.of(),
+                    List.of(),
+                    BinaryReplayRecoveryStopReason.CLEAN_EOF,
+                    0);
         }
 
         byte[] bytes = Files.readAllBytes(path);
+        if (bytes.length < BinaryReplayFormat.APPEND_LOG_HEADER_SIZE) {
+            return new BinaryReplayAppendLogRecovery(
+                    BinaryReplayAppendLogHeader.empty(),
+                    List.of(),
+                    List.of(),
+                    List.of(),
+                    BinaryReplayRecoveryStopReason.TRUNCATED_HEADER,
+                    0);
+        }
+
+        ParsedHeader parsedHeader = parseHeader(bytes);
+        if (parsedHeader == null) {
+            return new BinaryReplayAppendLogRecovery(
+                    BinaryReplayAppendLogHeader.empty(),
+                    List.of(),
+                    List.of(),
+                    List.of(),
+                    BinaryReplayRecoveryStopReason.MALFORMED_HEADER,
+                    0);
+        }
+
+        BinaryReplayAppendLogHeader header = parsedHeader.header();
         List<String> stringTable = new ArrayList<>();
         List<TimelineEvent> timeline = new ArrayList<>();
         List<DecodedRecord> records = new ArrayList<>();
-        int offset = 0;
+        int offset = parsedHeader.nextOffset();
 
         while (offset < bytes.length) {
             VarIntRead recordLengthRead = tryReadVarInt(bytes, offset);
             if (recordLengthRead == null) {
-                return new BinaryReplayAppendLogRecovery(records, timeline, stringTable,
+                return new BinaryReplayAppendLogRecovery(header, records, timeline, stringTable,
                         BinaryReplayRecoveryStopReason.TRUNCATED_RECORD_LENGTH, offset);
             }
 
@@ -52,7 +81,7 @@ public final class BinaryReplayAppendLogReader {
             int recordContentOffset = recordLengthRead.nextOffset();
             int recordEnd = recordContentOffset + recordLength + BinaryReplayFormat.APPEND_LOG_CRC_BYTES;
             if (recordLength < 0 || recordEnd > bytes.length) {
-                return new BinaryReplayAppendLogRecovery(records, timeline, stringTable,
+                return new BinaryReplayAppendLogRecovery(header, records, timeline, stringTable,
                         BinaryReplayRecoveryStopReason.TRUNCATED_RECORD, offset);
             }
 
@@ -60,7 +89,7 @@ public final class BinaryReplayAppendLogReader {
             int storedChecksum = readLittleEndianInt(bytes, recordContentOffset + recordLength);
             int computedChecksum = calculateCrc32c(recordContent);
             if (storedChecksum != computedChecksum) {
-                return new BinaryReplayAppendLogRecovery(records, timeline, stringTable,
+                return new BinaryReplayAppendLogRecovery(header, records, timeline, stringTable,
                         BinaryReplayRecoveryStopReason.CHECKSUM_MISMATCH, offset);
             }
 
@@ -69,7 +98,7 @@ public final class BinaryReplayAppendLogReader {
                 if (record.type() == BinaryRecordType.DEFINE_STRING) {
                     BinaryReplayAppendLogCodec.DefinedString definedString = BinaryReplayAppendLogCodec.decodeDefineString(record.payload());
                     if (definedString.index() != stringTable.size()) {
-                        return new BinaryReplayAppendLogRecovery(records, timeline, stringTable,
+                        return new BinaryReplayAppendLogRecovery(header, records, timeline, stringTable,
                                 BinaryReplayRecoveryStopReason.MALFORMED_RECORD, offset);
                     }
                     stringTable.add(definedString.value());
@@ -78,15 +107,40 @@ public final class BinaryReplayAppendLogReader {
                 }
                 records.add(record);
             } catch (IllegalArgumentException ex) {
-                return new BinaryReplayAppendLogRecovery(records, timeline, stringTable,
+                return new BinaryReplayAppendLogRecovery(header, records, timeline, stringTable,
                         BinaryReplayRecoveryStopReason.MALFORMED_RECORD, offset);
             }
 
             offset = recordEnd;
         }
 
-        return new BinaryReplayAppendLogRecovery(records, timeline, stringTable,
+        return new BinaryReplayAppendLogRecovery(header, records, timeline, stringTable,
                 BinaryReplayRecoveryStopReason.CLEAN_EOF, offset);
+    }
+
+    private static ParsedHeader parseHeader(byte[] bytes) {
+        ByteBuffer headerBuffer = ByteBuffer.wrap(bytes, 0, BinaryReplayFormat.APPEND_LOG_HEADER_SIZE)
+                .order(BinaryReplayFormat.PRIMITIVE_BYTE_ORDER);
+
+        byte[] magic = new byte[BinaryReplayFormat.APPEND_LOG_MAGIC.length];
+        headerBuffer.get(magic);
+        if (!java.util.Arrays.equals(magic, BinaryReplayFormat.APPEND_LOG_MAGIC)) {
+            return null;
+        }
+
+        int headerVersion = headerBuffer.get() & 0xFF;
+        int flags = headerBuffer.get() & 0xFF;
+        short reserved = headerBuffer.getShort();
+        long recordingStartedAtEpochMillis = headerBuffer.getLong();
+
+        if (headerVersion != BinaryReplayFormat.APPEND_LOG_HEADER_VERSION
+                || flags != BinaryReplayFormat.APPEND_LOG_HEADER_FLAGS_NONE
+                || reserved != 0
+                || recordingStartedAtEpochMillis < 0) {
+            return null;
+        }
+
+        return new ParsedHeader(new BinaryReplayAppendLogHeader(recordingStartedAtEpochMillis), BinaryReplayFormat.APPEND_LOG_HEADER_SIZE);
     }
 
     private static int calculateCrc32c(byte[] recordContent) {
@@ -135,6 +189,9 @@ public final class BinaryReplayAppendLogReader {
     }
 
     private record VarIntRead(int value, int nextOffset) {
+    }
+
+    private record ParsedHeader(BinaryReplayAppendLogHeader header, int nextOffset) {
     }
 
     public record DecodedRecord(BinaryRecordType type, byte[] payload, int storedChecksum, byte[] checksummedBytes) {

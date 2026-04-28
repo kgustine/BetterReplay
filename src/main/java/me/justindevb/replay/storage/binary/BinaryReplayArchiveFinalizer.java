@@ -27,7 +27,16 @@ public final class BinaryReplayArchiveFinalizer implements ReplayFinalizer {
 
     @Override
     public byte[] finalizeReplay(String replayName, List<TimelineEvent> timeline, String pluginVersion) throws IOException {
-        return finalizeRecoveredReplay(replayName, buildRecovery(timeline), pluginVersion);
+        return finalizeReplay(replayName, timeline, pluginVersion, System.currentTimeMillis());
+    }
+
+    public byte[] finalizeReplay(
+            String replayName,
+            List<TimelineEvent> timeline,
+            String pluginVersion,
+            long recordingStartedAtEpochMillis
+    ) throws IOException {
+        return finalizeRecoveredReplay(replayName, buildRecovery(timeline, recordingStartedAtEpochMillis), pluginVersion);
     }
 
     public byte[] finalizeRecoveredReplay(
@@ -40,12 +49,13 @@ public final class BinaryReplayArchiveFinalizer implements ReplayFinalizer {
         BinaryReplayManifest manifest = BinaryReplayManifest.createV1(
                 pluginVersion,
                 pluginVersion,
+                resolveRecordingStartedAtEpochMillis(recovery),
                 crc32cHex(compressedPayload));
         byte[] manifestBytes = gson.toJson(manifest).getBytes(StandardCharsets.UTF_8);
         return buildArchive(manifestBytes, compressedPayload);
     }
 
-    private static BinaryReplayAppendLogRecovery buildRecovery(List<TimelineEvent> timeline) throws IOException {
+    private static BinaryReplayAppendLogRecovery buildRecovery(List<TimelineEvent> timeline, long recordingStartedAtEpochMillis) throws IOException {
         List<String> stringTable = new ArrayList<>();
         Map<String, Integer> stringIndexes = new LinkedHashMap<>();
         List<BinaryReplayAppendLogReader.DecodedRecord> records = new ArrayList<>();
@@ -57,8 +67,13 @@ public final class BinaryReplayArchiveFinalizer implements ReplayFinalizer {
             records.add(new BinaryReplayAppendLogReader.DecodedRecord(recordType, payload, 0, recordContent));
         }
 
-        return new BinaryReplayAppendLogRecovery(records, timeline, stringTable,
+        return new BinaryReplayAppendLogRecovery(new BinaryReplayAppendLogHeader(recordingStartedAtEpochMillis), records, timeline, stringTable,
                 BinaryReplayRecoveryStopReason.CLEAN_EOF, 0);
+    }
+
+    private static long resolveRecordingStartedAtEpochMillis(BinaryReplayAppendLogRecovery recovery) {
+        long recorded = recovery.header().recordingStartedAtEpochMillis();
+        return recorded > 0 ? recorded : System.currentTimeMillis();
     }
 
     private static int indexString(
