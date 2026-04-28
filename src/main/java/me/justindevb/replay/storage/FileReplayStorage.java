@@ -34,7 +34,7 @@ public class FileReplayStorage implements ReplayStorage {
         this.replay = replay;
         this.saveCodec = saveCodec;
         this.formatDetector = formatDetector;
-        this.replayExporter = new ReplayExporter();
+        this.replayExporter = new ReplayExporter(new File(replay.getDataFolder(), "exports"));
         this.replayFolder = new File(replay.getDataFolder(), "replays");
         if (!replayFolder.exists())
             replayFolder.mkdirs();

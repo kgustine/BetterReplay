@@ -12,6 +12,7 @@ import org.bukkit.configuration.file.FileConfiguration;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.api.io.TempDir;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -59,11 +60,15 @@ class MySQLReplayStorageTest {
     @Mock private FoliaLib foliaLib;
     @Mock private PlatformScheduler scheduler;
 
+    @TempDir
+    File tempDir;
+
     private MySQLReplayStorage storage;
     private byte[] storedBytes;
 
     @BeforeEach
     void setUp() throws Exception {
+        when(plugin.getDataFolder()).thenReturn(tempDir);
         when(plugin.getPluginMeta()).thenReturn(pluginMeta);
         when(pluginMeta.getVersion()).thenReturn("1.4.0");
         when(plugin.getFoliaLib()).thenReturn(foliaLib);
@@ -155,6 +160,7 @@ class MySQLReplayStorageTest {
         when(selectResultSet.getBytes("data")).thenReturn(archive);
 
         File exported = storage.getReplayFile("export-filtered", new ReplayExportQuery(null, 5, 10)).get();
+        assertEquals(new File(tempDir, "exports").getCanonicalFile(), exported.getParentFile().getCanonicalFile());
         List<TimelineEvent> filtered = new BinaryReplayStorageCodec().decodeTimeline(Files.readAllBytes(exported.toPath()), "1.4.0");
 
         assertEquals(2, filtered.size());

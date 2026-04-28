@@ -278,6 +278,7 @@ class FileReplayStorageTest {
         storage.saveReplay("filtered", sampleTimeline()).get();
 
         File exported = storage.getReplayFile("filtered", new ReplayExportQuery(null, 5, 10)).get();
+        assertEquals(new File(tempDir, "exports").getCanonicalFile(), exported.getParentFile().getCanonicalFile());
         List<TimelineEvent> filtered = new BinaryReplayStorageCodec().decodeTimeline(Files.readAllBytes(exported.toPath()), "1.4.0");
 
         assertEquals(2, filtered.size());

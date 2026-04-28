@@ -28,6 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Binary replay manifests now store `recordingStartedAtEpochMillis`, and append-log temp files now persist a fixed metadata header so crash-safe recovery preserves the original recording start time
 
 ### Fixed
+- Replay exports created via `/replay export` now write to the plugin `exports/` folder instead of the system temp directory
 - `activeSessions` in `RecorderManager` changed to `ConcurrentHashMap` to prevent `ConcurrentModificationException` (#33)
 - Nested replay inventory loss when starting a replay during an active replay (#31)
 - Replay controls getting stuck after replay ends (#27)

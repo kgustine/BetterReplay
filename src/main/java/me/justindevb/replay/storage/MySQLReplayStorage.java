@@ -34,7 +34,7 @@ public class MySQLReplayStorage implements ReplayStorage {
         this.replay = replay;
         this.saveCodec = saveCodec;
         this.formatDetector = formatDetector;
-        this.replayExporter = new ReplayExporter();
+        this.replayExporter = new ReplayExporter(new File(replay.getDataFolder(), "exports"));
         init();
     }
 

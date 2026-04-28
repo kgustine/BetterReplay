@@ -20,13 +20,23 @@ import java.util.Set;
 public final class ReplayExporter {
 
     private final BinaryReplayArchiveFinalizer finalizer;
+    private final File exportDirectory;
 
     public ReplayExporter() {
-        this(new BinaryReplayArchiveFinalizer());
+        this(new BinaryReplayArchiveFinalizer(), null);
+    }
+
+    public ReplayExporter(File exportDirectory) {
+        this(new BinaryReplayArchiveFinalizer(), exportDirectory);
     }
 
     ReplayExporter(BinaryReplayArchiveFinalizer finalizer) {
+        this(finalizer, null);
+    }
+
+    ReplayExporter(BinaryReplayArchiveFinalizer finalizer, File exportDirectory) {
         this.finalizer = finalizer;
+        this.exportDirectory = exportDirectory;
     }
 
     public File exportReplay(String replayName, List<TimelineEvent> timeline, ReplayExportQuery query, String pluginVersion) throws IOException {
@@ -34,10 +44,19 @@ public final class ReplayExporter {
         Set<String> matchingPlayers = resolveMatchingPlayers(timeline, effectiveQuery);
         List<TimelineEvent> filtered = filterTimeline(timeline, effectiveQuery, matchingPlayers);
 
-        File tempFile = File.createTempFile("replay_" + replayName + "_", BinaryReplayFormat.FILE_EXTENSION);
+        File tempFile = createExportFile(replayName);
         tempFile.deleteOnExit();
         Files.write(tempFile.toPath(), finalizer.finalizeReplay(replayName, filtered, pluginVersion));
         return tempFile;
+    }
+
+    private File createExportFile(String replayName) throws IOException {
+        if (exportDirectory == null) {
+            return File.createTempFile("replay_" + replayName + "_", BinaryReplayFormat.FILE_EXTENSION);
+        }
+
+        Files.createDirectories(exportDirectory.toPath());
+        return File.createTempFile("replay_" + replayName + "_", BinaryReplayFormat.FILE_EXTENSION, exportDirectory);
     }
 
     private static List<TimelineEvent> filterTimeline(List<TimelineEvent> timeline, ReplayExportQuery query, Set<String> matchingPlayers) {

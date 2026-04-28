@@ -87,7 +87,7 @@ Permissions:
 - replay.*
 
 Hidden export usage:
-- `/replay export <name> [player=<name|all>] [start=<tick>] [end=<tick>]` exports a replay to a temporary `.br` file and prints the generated path.
+- `/replay export <name> [player=<name|all>] [start=<tick>] [end=<tick>]` exports a replay to a `.br` file under the plugin `exports/` folder and prints the generated path.
 - Replay names may contain spaces as long as all filter arguments come after the full replay name.
 
 Hidden benchmark usage:
