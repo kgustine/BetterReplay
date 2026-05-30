@@ -1,6 +1,8 @@
 # BetterReplay Binary Replay Format Specification
 
-This document describes the v1 binary replay format used by BetterReplay.
+This document describes the BetterReplay binary replay format.
+
+The current runtime format is `v2`. The archive framing, append-log structure, payload header, and chunk sections described below are still aligned with the original `v1` contract unless explicitly called out otherwise. The `v2` format change replaces the old monolithic inventory payload with split `EquipmentStateUpdate` and `InventoryStorageUpdate` records that store raw item bytes directly. Older alpha `.br` archives that used the pre-`v2` inventory encoding are intentionally unsupported by current loaders.
 
 It is intended to be readable by developers who need to understand how replay data is structured on disk, how the archive is organized, and how the binary payload should be decoded.
 

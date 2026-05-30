@@ -7,6 +7,7 @@ import me.justindevb.replay.chunk.ChunkRecordingArtifacts;
 import me.justindevb.replay.recording.TimelineEvent;
 import me.justindevb.replay.storage.ReplaySaveRequest;
 import me.justindevb.replay.util.VersionUtil;
+import me.justindevb.replay.util.io.SerializedItemData;
 import net.jpountz.lz4.LZ4FrameInputStream;
 import net.jpountz.lz4.LZ4FrameOutputStream;
 import org.junit.jupiter.api.Test;
@@ -135,6 +136,36 @@ class BinaryReplayStorageCodecTest {
         updateManifestChecksum(entries);
 
         assertThrows(IOException.class, () -> codec.decodeTimeline(writeArchive(entries), "1.4.0"));
+    }
+
+    @Test
+    void roundTripsSplitInventoryEvents() throws Exception {
+    List<TimelineEvent> timeline = List.of(
+        new TimelineEvent.EquipmentStateUpdate(
+            1,
+            "uuid-1",
+            2,
+            SerializedItemData.fromBytes(new byte[] {1, 2, 3}),
+            SerializedItemData.fromBytes(new byte[] {4, 5, 6}),
+            List.of(
+                SerializedItemData.fromBytes(new byte[] {7}),
+                SerializedItemData.fromBytes(new byte[] {8}),
+                SerializedItemData.fromBytes(new byte[] {9}),
+                SerializedItemData.empty()
+            )),
+        new TimelineEvent.InventoryStorageUpdate(
+            1,
+            "uuid-1",
+            List.of(
+                SerializedItemData.fromBytes(new byte[] {10}),
+                SerializedItemData.empty(),
+                SerializedItemData.fromBytes(new byte[] {11, 12})
+            ))
+    );
+
+    byte[] archive = codec.finalizeReplay("inventory", timeline, "1.4.0", RECORDING_STARTED_AT);
+
+    assertEquals(timeline, codec.decodeTimeline(archive, "1.4.0"));
     }
 
     @Test

@@ -11,7 +11,7 @@ It records player and nearby entity activity on the server, saves the timeline, 
 - Supports two storage backends:
   - local file storage
   - MySQL
-- New saves use finalized binary `.br` replay archives; legacy JSON replays are still readable during the migration window
+- New saves use finalized binary `.br` replay archives; legacy JSON replays are still readable during the migration window, but older alpha `.br` inventory archives are intentionally not loaded by current builds
 
 ## How this differs from client-side replay mods
 
@@ -74,6 +74,8 @@ In short: BetterReplay focuses on server-managed replay workflows and API-driven
 ### Binary storage and admin tooling
 
 New saves are written as finalized binary `.br` archives for both file and MySQL storage. Active recordings stream into crash-safe append logs first, which lets BetterReplay recover orphaned temporary recordings on the next startup instead of silently losing them after a crash or forced stop.
+
+Current `.br` archives use binary replay format `v2`, which records equipment state and storage inventory as separate raw-byte payloads. Legacy JSON replay loading remains available during migration, but pre-`v2` alpha binary inventory archives are intentionally unsupported.
 
 The same archive format powers the hidden admin utilities:
 
@@ -159,11 +161,11 @@ Valid values for `General.Storage-Type` are:
 - `file`
   - Stores replay data under the plugin data folder.
   - New saves now write finalized binary `.br` archives.
-  - The loader still auto-detects both legacy JSON payloads and finalized binary `.br` archives through `ReplayStorageCodec` during the transition period.
+  - The loader still auto-detects legacy JSON payloads and current finalized binary `.br` archives through `ReplayStorageCodec` during the transition period.
 - `mysql`
   - Stores replay data in a MySQL table (`replays`) using the configured `General.MySQL.*` values.
   - New saves now store finalized binary `.br` archives as blob data.
-  - The loader still auto-detects both legacy JSON payloads and finalized binary `.br` archives during the transition period.
+  - The loader still auto-detects legacy JSON payloads and current finalized binary `.br` archives during the transition period.
 
 These values should be lowercase as shown above.
 
@@ -251,6 +253,7 @@ Notes:
 - Protected replays are highlighted in `/replay list` using `List.Protected-Highlight-Color`; the default is gold (`&6`).
 - Retention durations accept `s`, `m`, `h`, and `d` suffixes.
 - Legacy JSON replay support is temporary compatibility only and is planned for removal in a later version; new recordings should stay on `.br`.
+- Older alpha `.br` archives using the pre-`v2` inventory encoding are intentionally unsupported; retain legacy JSON if you need a migration path across that binary format boundary.
 - The hidden `/replay benchmark` command is now always available to senders with `replay.benchmark`, and `General.Enable-Benchmark-Command` has been removed from config
 
 ## Build from source
@@ -289,13 +292,14 @@ Primary docs:
 
 - [docs/API.md](docs/API.md) - public API reference
 - [docs/BENCHMARKS.md](docs/BENCHMARKS.md) - benchmark command usage, workload presets, and metric definitions
-- [docs/BINARY_FORMAT_SPEC.md](docs/BINARY_FORMAT_SPEC.md) - v1 binary replay payload and archive structure
+- [docs/BINARY_FORMAT_SPEC.md](docs/BINARY_FORMAT_SPEC.md) - binary replay payload and archive structure notes, including the current `v2` inventory/event split
 - [docs/ARCHIVE_MANIFEST_SCHEMA.md](docs/ARCHIVE_MANIFEST_SCHEMA.md) - `manifest.json` field definitions and validation rules
 - [docs/DEPRECATIONS.md](docs/DEPRECATIONS.md) - planned feature and compatibility removals
 
 Binary replay note:
 - Finalized `.br` archives now store the recording start wall-clock timestamp in `manifest.json` as `recordingStartedAtEpochMillis`.
 - Active temp append-logs also write a fixed file header carrying the same timestamp so final saves can preserve it after crash-safe recovery.
+- Current `.br` archives use format version `2` and store equipment-state and storage-inventory payloads as separate raw item-byte records.
 - Chunk-enabled `.br` archives may also include `chunks/` region entries containing palette-compressed chunk baselines that are decoded lazily during playback.
 
 Planning docs:

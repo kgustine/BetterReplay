@@ -11,6 +11,7 @@ import com.github.retrooper.packetevents.util.Vector3i;
 import io.github.retrooper.packetevents.util.SpigotConversionUtil;
 import me.justindevb.replay.Replay;
 import me.justindevb.replay.recording.TimelineEvent;
+import me.justindevb.replay.util.io.SerializedItemData;
 import me.justindevb.replay.util.spawning.SpawnFakePlayer;
 import net.kyori.adventure.text.Component;
 import org.bukkit.Bukkit;
@@ -23,8 +24,6 @@ import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.meta.ItemMeta;
 import java.util.*;
-
-import static me.justindevb.replay.util.io.ItemStackSerializer.deserializeItem;
 
 public class RecordedPlayer extends RecordedEntity {
     private final String name;
@@ -47,7 +46,8 @@ public class RecordedPlayer extends RecordedEntity {
     };
 
 
-    private TimelineEvent.InventoryUpdate currentInventory;
+    private TimelineEvent.InventoryStorageUpdate currentStorage;
+    private TimelineEvent.EquipmentStateUpdate currentEquipment;
 
 
     protected RecordedPlayer(UUID uuid, String name, EntityType type, Player viewer) {
@@ -71,13 +71,13 @@ public class RecordedPlayer extends RecordedEntity {
         WrapperPlayServerEntityMetadata metadata = new WrapperPlayServerEntityMetadata(fakeEntityId, Collections.singletonList(flagsData));
         PacketEvents.getAPI().getPlayerManager().sendPacket(viewer, metadata);
 
-        if (currentInventory != null) {
+        if (currentEquipment != null) {
             // Reset last-known state so equipment packets are re-sent now that
             // the client has had time to process the entity spawn.
             lastMainHand = null;
             lastOffHand = null;
             Arrays.fill(lastArmor, new ItemStack(Material.AIR));
-            showInventorySnapshot(currentInventory);
+            showEquipmentState(currentEquipment);
         }
     }
 
@@ -118,31 +118,51 @@ public class RecordedPlayer extends RecordedEntity {
         return name;
     }
 
-    public void updateInventory(TimelineEvent.InventoryUpdate snapshot) {
-        currentInventory = snapshot;
-
-        if (!spawned)
-            return;
-
-        showInventorySnapshot(currentInventory);
+    public void updateStorage(TimelineEvent.InventoryStorageUpdate snapshot) {
+        currentStorage = snapshot;
     }
 
-    public void updateHeldItems(TimelineEvent.HeldItemChange change) {
+    public void updateEquipment(TimelineEvent.EquipmentStateUpdate change) {
+        currentEquipment = change;
+
         if (!spawned) return;
 
+        showEquipmentState(change);
+    }
+
+    public void showEquipmentState(TimelineEvent.EquipmentStateUpdate state) {
         List<Equipment> packets = new ArrayList<>();
         boolean changed = false;
 
-        ItemStack mainHand = deserializeItem(change.mainHand());
+        ItemStack mainHand = toItemStack(state.mainHand());
         if (!areItemsEqual(mainHand, lastMainHand)) {
             lastMainHand = mainHand != null ? mainHand.clone() : new ItemStack(Material.AIR);
             changed = true;
         }
 
-        ItemStack offHand = deserializeItem(change.offHand());
+        ItemStack offHand = toItemStack(state.offHand());
         if (!areItemsEqual(offHand, lastOffHand)) {
             lastOffHand = offHand != null ? offHand.clone() : new ItemStack(Material.AIR);
             changed = true;
+        }
+        EquipmentSlot[] armorSlots = {
+                EquipmentSlot.BOOTS,
+                EquipmentSlot.LEGGINGS,
+                EquipmentSlot.CHEST_PLATE,
+                EquipmentSlot.HELMET
+        };
+
+        List<SerializedItemData> rawArmorList = state.armor();
+
+        if (rawArmorList != null) {
+            for (int i = 0; i < armorSlots.length; i++) {
+                ItemStack armorItem = extractArmor(rawArmorList, i);
+
+                if (!areItemsEqual(armorItem, lastArmor[i])) {
+                    lastArmor[i] = armorItem != null ? armorItem.clone() : new ItemStack(Material.AIR);
+                    changed = true;
+                }
+            }
         }
 
         if (!changed) return;
@@ -151,14 +171,36 @@ public class RecordedPlayer extends RecordedEntity {
                 EquipmentSlot.MAIN_HAND,
                 SpigotConversionUtil.fromBukkitItemStack(lastMainHand)
         ));
+
         packets.add(new Equipment(
                 EquipmentSlot.OFF_HAND,
                 SpigotConversionUtil.fromBukkitItemStack(lastOffHand)
         ));
 
+        for (int i = 0; i < armorSlots.length; i++) {
+            packets.add(new Equipment(
+                    armorSlots[i],
+                    SpigotConversionUtil.fromBukkitItemStack(lastArmor[i])
+            ));
+        }
+
         WrapperPlayServerEntityEquipment packet =
                 new WrapperPlayServerEntityEquipment(fakeEntityId, packets);
+
         PacketEvents.getAPI().getPlayerManager().sendPacket(viewer, packet);
+    }
+
+    private ItemStack extractArmor(List<SerializedItemData> rawArmorList, int index) {
+        if (rawArmorList == null || index >= rawArmorList.size()) {
+            return new ItemStack(Material.AIR);
+        }
+
+        ItemStack item = toItemStack(rawArmorList.get(index));
+        return item != null ? item : new ItemStack(Material.AIR);
+    }
+
+    private ItemStack toItemStack(SerializedItemData item) {
+        return item == null ? null : item.toItemStack();
     }
 
 
@@ -235,75 +277,6 @@ public class RecordedPlayer extends RecordedEntity {
         PacketEvents.getAPI().getPlayerManager().sendPacket(viewer, swing);
 
     }
-    public void showInventorySnapshot(TimelineEvent.InventoryUpdate inv) {
-        boolean changed = false;
-        List<Equipment> packets = new ArrayList<>();
-
-        ItemStack mainHand = deserializeItem(inv.mainHand());
-        if (!areItemsEqual(mainHand, lastMainHand)) {
-            lastMainHand = mainHand != null ? mainHand.clone() : new ItemStack(Material.AIR);
-            changed = true;
-        }
-
-        ItemStack offHand = deserializeItem(inv.offHand());
-        if (!areItemsEqual(offHand, lastOffHand)) {
-            lastOffHand = offHand != null ? offHand.clone() : new ItemStack(Material.AIR);
-            changed = true;
-        }
-
-        EquipmentSlot[] armorSlots = {
-                EquipmentSlot.BOOTS,
-                EquipmentSlot.LEGGINGS,
-                EquipmentSlot.CHEST_PLATE,
-                EquipmentSlot.HELMET
-        };
-
-        List<String> rawArmorList = inv.armor();
-
-        if (rawArmorList != null) {
-            for (int i = 0; i < armorSlots.length; i++) {
-                ItemStack armorItem = extractArmor(rawArmorList, i);
-
-                if (!areItemsEqual(armorItem, lastArmor[i])) {
-                    lastArmor[i] = armorItem != null ? armorItem.clone() : new ItemStack(Material.AIR);
-                    changed = true;
-                }
-            }
-        }
-
-        if (!changed) return;
-
-        packets.add(new Equipment(
-                EquipmentSlot.MAIN_HAND,
-                SpigotConversionUtil.fromBukkitItemStack(lastMainHand)
-        ));
-
-        packets.add(new Equipment(
-                EquipmentSlot.OFF_HAND,
-                SpigotConversionUtil.fromBukkitItemStack(lastOffHand)
-        ));
-
-        for (int i = 0; i < armorSlots.length; i++) {
-            packets.add(new Equipment(
-                    armorSlots[i],
-                    SpigotConversionUtil.fromBukkitItemStack(lastArmor[i])
-            ));
-        }
-
-        WrapperPlayServerEntityEquipment packet =
-                new WrapperPlayServerEntityEquipment(fakeEntityId, packets);
-
-        PacketEvents.getAPI().getPlayerManager().sendPacket(viewer, packet);
-    }
-
-    private ItemStack extractArmor(List<String> rawArmorList, int index) {
-        if (rawArmorList == null || index >= rawArmorList.size()) {
-            return new ItemStack(Material.AIR);
-        }
-
-        ItemStack item = deserializeItem(rawArmorList.get(index));
-        return item != null ? item : new ItemStack(Material.AIR);
-    }
 
     private boolean areItemsEqual(ItemStack a, ItemStack b) {
         if (a == null && b == null) return true;
@@ -326,23 +299,25 @@ public class RecordedPlayer extends RecordedEntity {
     public void openInventoryForViewer(Player viewer) {
         Inventory inv = Bukkit.createInventory(null, 45, Component.text(name + "'s Inventory"));
 
-        if (currentInventory != null) {
-            List<String> contents = currentInventory.contents();
+        if (currentStorage != null) {
+            List<SerializedItemData> contents = currentStorage.storage();
             if (contents != null) {
                 for (int i = 0; i < contents.size() && i < 36; i++) {
-                    inv.setItem(i, deserializeItem(contents.get(i)));
+                    inv.setItem(i, toItemStack(contents.get(i)));
                 }
             }
+        }
 
-            List<String> armor = currentInventory.armor();
+        if (currentEquipment != null) {
+            List<SerializedItemData> armor = currentEquipment.armor();
             if (armor != null && armor.size() == 4) {
-                inv.setItem(39, deserializeItem(armor.get(3))); // helmet
-                inv.setItem(38, deserializeItem(armor.get(2))); // chestplate
-                inv.setItem(37, deserializeItem(armor.get(1))); // leggings
-                inv.setItem(36, deserializeItem(armor.get(0))); // boots
+                inv.setItem(39, toItemStack(armor.get(3))); // helmet
+                inv.setItem(38, toItemStack(armor.get(2))); // chestplate
+                inv.setItem(37, toItemStack(armor.get(1))); // leggings
+                inv.setItem(36, toItemStack(armor.get(0))); // boots
             }
 
-            inv.setItem(40, deserializeItem(currentInventory.offHand()));
+            inv.setItem(40, toItemStack(currentEquipment.offHand()));
         }
 
         Replay.getInstance().getFoliaLib().getScheduler().runNextTick(task -> {

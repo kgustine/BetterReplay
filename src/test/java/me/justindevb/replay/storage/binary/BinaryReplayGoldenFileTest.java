@@ -24,7 +24,7 @@ class BinaryReplayGoldenFileTest {
 
     @Test
     void decodesMinimalGoldenArchive() throws Exception {
-        byte[] fixture = readFixture("goldens/minimal-v1.br");
+        byte[] fixture = readFixture("goldens/minimal-v2.br");
 
         List<TimelineEvent> decoded = codec.decodeTimeline(fixture, "1.4.0");
 
@@ -37,7 +37,7 @@ class BinaryReplayGoldenFileTest {
 
     @Test
     void decodesSeekGoldenArchiveAndRetainsIndexMetadata() throws Exception {
-        byte[] fixture = readFixture("goldens/seek-v1.br");
+        byte[] fixture = readFixture("goldens/seek-v2.br");
 
         BinaryReplayStorageCodec.ParsedBinaryReplay replay = codec.openReplay(fixture, "1.4.0");
 
@@ -48,7 +48,7 @@ class BinaryReplayGoldenFileTest {
 
     @Test
     void goldenManifestCarriesExpectedMetadata() throws Exception {
-        byte[] fixture = readFixture("goldens/minimal-v1.br");
+        byte[] fixture = readFixture("goldens/minimal-v2.br");
         Map<String, byte[]> entries = readArchiveEntries(fixture);
 
         BinaryReplayManifest manifest = GSON.fromJson(

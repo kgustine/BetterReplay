@@ -131,7 +131,7 @@ class RecordingSessionIntegrationTest {
             List<TimelineEvent> timeline = s.getTimeline();
             assertFalse(timeline.isEmpty());
 
-            // First event should be a PlayerMove (or InventoryUpdate at tick 0)
+            // First event should be a PlayerMove or an initial inventory/equipment event at tick 0.
             boolean hasPlayerMove = timeline.stream()
                     .anyMatch(e -> e instanceof TimelineEvent.PlayerMove);
             assertTrue(hasPlayerMove);
@@ -314,7 +314,7 @@ class RecordingSessionIntegrationTest {
             // Check that inventory updates were recorded (at tick 0; subsequent checks
             // may skip if inventory is unchanged between intervals)
             long invCount = s.getTimeline().stream()
-                    .filter(e -> e instanceof TimelineEvent.InventoryUpdate)
+                    .filter(e -> e instanceof TimelineEvent.InventoryStorageUpdate)
                     .count();
             assertTrue(invCount >= 1, "Expected at least 1 inventory update in 10 ticks, got " + invCount);
         }

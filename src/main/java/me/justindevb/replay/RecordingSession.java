@@ -13,6 +13,9 @@ import me.justindevb.replay.recording.RecordingEventHandler;
 import me.justindevb.replay.recording.RecordingPacketHandler;
 import me.justindevb.replay.recording.TimelineBuilder;
 import me.justindevb.replay.recording.TimelineEvent;
+import me.justindevb.replay.recording.inventory.InventoryCaptureService;
+import me.justindevb.replay.recording.inventory.InventoryCaptureService.CapturedEquipmentState;
+import me.justindevb.replay.recording.inventory.InventoryCaptureService.CapturedInventoryStorageSnapshot;
 import me.justindevb.replay.storage.ReplaySaveRequest;
 import me.justindevb.replay.storage.binary.BinaryReplayAppendLogHeader;
 import me.justindevb.replay.storage.binary.BinaryReplayAppendLogRecovery;
@@ -25,17 +28,14 @@ import org.bukkit.Location;
 import org.bukkit.entity.Entity;
 import org.bukkit.entity.EntityType;
 import org.bukkit.entity.Player;
-import org.bukkit.event.HandlerList;
-import org.bukkit.inventory.ItemStack;
 import org.bukkit.configuration.file.FileConfiguration;
+import org.bukkit.event.HandlerList;
 
 import java.io.File;
 import java.io.IOException;
 import java.util.*;
 import java.util.logging.Level;
 import java.util.logging.Logger;
-
-import static me.justindevb.replay.util.io.ItemStackSerializer.serializeItem;
 
 /**
  * Coordinates a recording session. Owns the tick loop and delegates event handling,
@@ -62,7 +62,11 @@ public class RecordingSession {
     private PacketListenerCommon packetListenerHandle;
 
     private static final int INVENTORY_CHECK_INTERVAL = 5;
-    private final Map<UUID, List<String>> lastInventorySnapshot = new HashMap<>();
+    private static final int CLEAN_INVENTORY_SWEEP_INTERVAL = 20;
+    private final InventoryCaptureService inventoryCaptureService = new InventoryCaptureService();
+    private final Map<UUID, CapturedInventoryStorageSnapshot> lastInventoryStorageSnapshot = new HashMap<>();
+    private final Map<UUID, CapturedEquipmentState> lastEquipmentState = new HashMap<>();
+    private final Set<UUID> inventoryDirtyPlayers = new HashSet<>();
     private int tick = 0;
     private int durationTicks = -1;
     private boolean stopped = false;
@@ -101,7 +105,7 @@ public class RecordingSession {
 
         this.tracker = new EntityTracker(players);
         this.builder = new TimelineBuilder(appendLogWriter, false);
-        this.eventHandler = new RecordingEventHandler(tracker, builder, this::getTick);
+        this.eventHandler = new RecordingEventHandler(tracker, builder, this::getTick, this::markInventoryDirty);
         this.packetHandler = new RecordingPacketHandler(
             tracker,
             builder,
@@ -162,8 +166,10 @@ public class RecordingSession {
             ));
         }
 
+        tickEquipmentCheck();
+
         if (tick % INVENTORY_CHECK_INTERVAL == 0) {
-            tickInventoryCheck();
+            tickInventoryCheck(tick % CLEAN_INVENTORY_SWEEP_INTERVAL == 0);
         }
 
         if (!chunkCaptureFailed
@@ -179,27 +185,36 @@ public class RecordingSession {
         tick++;
     }
 
-    private void tickInventoryCheck() {
+    private void tickEquipmentCheck() {
         for (UUID uuid : tracker.getTrackedPlayers()) {
             Player p = Bukkit.getPlayer(uuid);
             if (p == null || !p.isOnline()) continue;
 
-            List<String> currentSerialized = new ArrayList<>();
-            currentSerialized.add(String.valueOf(p.getInventory().getHeldItemSlot()));
-            for (ItemStack item : p.getInventory().getContents()) {
-                currentSerialized.add(serializeItem(item));
-            }
-            currentSerialized.add(serializeItem(p.getInventory().getItemInOffHand()));
-            for (ItemStack armor : p.getInventory().getArmorContents()) {
-                currentSerialized.add(serializeItem(armor));
+            CapturedEquipmentState currentEquipment = inventoryCaptureService.captureEquipment(p);
+            CapturedEquipmentState previousEquipment = lastEquipmentState.get(uuid);
+            if (!inventoryCaptureService.hasEquipmentChanged(currentEquipment, previousEquipment)) {
+                continue;
             }
 
-            List<String> previous = lastInventorySnapshot.get(uuid);
-            if (currentSerialized.equals(previous)) continue;
+            lastEquipmentState.put(uuid, currentEquipment);
+            builder.addEvent(inventoryCaptureService.toEquipmentEvent(tick, uuid.toString(), currentEquipment));
+        }
+    }
 
-            lastInventorySnapshot.put(uuid, currentSerialized);
+    private void tickInventoryCheck(boolean includeCleanPlayers) {
+        for (UUID uuid : tracker.getTrackedPlayers()) {
+            Player p = Bukkit.getPlayer(uuid);
+            if (p == null || !p.isOnline()) continue;
+            if (!includeCleanPlayers && !inventoryDirtyPlayers.contains(uuid)) continue;
 
-            builder.addEvent(builder.captureInventory(tick, uuid.toString(), p));
+            CapturedInventoryStorageSnapshot currentStorage = inventoryCaptureService.captureStorage(p);
+            CapturedInventoryStorageSnapshot previousStorage = lastInventoryStorageSnapshot.get(uuid);
+            if (inventoryCaptureService.hasStorageChanged(currentStorage, previousStorage)) {
+                lastInventoryStorageSnapshot.put(uuid, currentStorage);
+                builder.addEvent(inventoryCaptureService.toStorageEvent(tick, uuid.toString(), currentStorage));
+            }
+
+            inventoryDirtyPlayers.remove(uuid);
         }
     }
 
@@ -284,7 +299,18 @@ public class RecordingSession {
             Player p = Bukkit.getPlayer(uuid);
             if (p == null || !p.isOnline()) continue;
 
-            builder.addEvent(builder.captureInventory(tick, uuid.toString(), p));
+            CapturedEquipmentState equipment = inventoryCaptureService.captureEquipment(p);
+            CapturedInventoryStorageSnapshot storage = inventoryCaptureService.captureStorage(p);
+            lastEquipmentState.put(uuid, equipment);
+            lastInventoryStorageSnapshot.put(uuid, storage);
+            builder.addEvent(inventoryCaptureService.toEquipmentEvent(tick, uuid.toString(), equipment));
+            builder.addEvent(inventoryCaptureService.toStorageEvent(tick, uuid.toString(), storage));
+        }
+    }
+
+    private void markInventoryDirty(UUID uuid) {
+        if (tracker.isTrackedPlayer(uuid)) {
+            inventoryDirtyPlayers.add(uuid);
         }
     }
 

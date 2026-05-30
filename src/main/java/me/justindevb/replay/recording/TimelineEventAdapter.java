@@ -1,6 +1,7 @@
 package me.justindevb.replay.recording;
 
 import com.google.gson.*;
+import me.justindevb.replay.util.io.SerializedItemData;
 
 import java.lang.reflect.Type;
 import java.util.ArrayList;
@@ -69,21 +70,20 @@ public class TimelineEventAdapter implements JsonSerializer<TimelineEvent>, Json
                 json.addProperty("yaw", e.yaw());
                 json.addProperty("pitch", e.pitch());
             }
-            case TimelineEvent.InventoryUpdate e -> {
+            case TimelineEvent.InventoryStorageUpdate e -> {
                 json.addProperty("tick", e.tick());
-                json.addProperty("type", "inventory_update");
+                json.addProperty("type", "inventory_storage_update");
                 json.addProperty("uuid", e.uuid());
-                json.addProperty("mainHand", e.mainHand());
-                json.addProperty("offHand", e.offHand());
-                json.add("armor", ctx.serialize(e.armor()));
-                json.add("contents", ctx.serialize(e.contents()));
+                json.add("storage", ctx.serialize(writeSerializedItemList(e.storage())));
             }
-            case TimelineEvent.HeldItemChange e -> {
+            case TimelineEvent.EquipmentStateUpdate e -> {
                 json.addProperty("tick", e.tick());
-                json.addProperty("type", "held_item_change");
+                json.addProperty("type", "equipment_state_update");
                 json.addProperty("uuid", e.uuid());
-                json.addProperty("mainHand", e.mainHand());
-                json.addProperty("offHand", e.offHand());
+                json.addProperty("heldSlot", e.heldSlot());
+                json.addProperty("mainHand", writeSerializedItem(e.mainHand()));
+                json.addProperty("offHand", writeSerializedItem(e.offHand()));
+                json.add("armor", ctx.serialize(writeSerializedItemList(e.armor())));
             }
             case TimelineEvent.BlockBreak e -> {
                 json.addProperty("tick", e.tick());
@@ -232,17 +232,16 @@ public class TimelineEventAdapter implements JsonSerializer<TimelineEvent>, Json
                     optDouble(obj, "x", 0), optDouble(obj, "y", 0), optDouble(obj, "z", 0),
                     optFloat(obj, "yaw", 0f), optFloat(obj, "pitch", 0f)
             );
-            case "inventory_update" -> new TimelineEvent.InventoryUpdate(
+                case "inventory_storage_update" -> new TimelineEvent.InventoryStorageUpdate(
                     tick, uuid,
-                    optString(obj, "mainHand"),
-                    optString(obj, "offHand"),
-                    readStringList(obj, "armor"),
-                    readStringList(obj, "contents")
+                    readSerializedItemList(obj, "storage")
             );
-            case "held_item_change" -> new TimelineEvent.HeldItemChange(
+                case "equipment_state_update" -> new TimelineEvent.EquipmentStateUpdate(
                     tick, uuid,
-                    optString(obj, "mainHand"),
-                    optString(obj, "offHand")
+                    optInt(obj, "heldSlot", 0),
+                    readSerializedItem(obj, "mainHand"),
+                    readSerializedItem(obj, "offHand"),
+                    readSerializedItemList(obj, "armor")
             );
             case "block_break" -> new TimelineEvent.BlockBreak(
                     tick, uuid,
@@ -348,5 +347,30 @@ public class TimelineEventAdapter implements JsonSerializer<TimelineEvent>, Json
             list.add(el.isJsonNull() ? null : el.getAsString());
         }
         return list;
+    }
+
+    private static List<String> writeSerializedItemList(List<SerializedItemData> items) {
+        List<String> list = new ArrayList<>(items.size());
+        for (SerializedItemData item : items) {
+            list.add(writeSerializedItem(item));
+        }
+        return list;
+    }
+
+    private static String writeSerializedItem(SerializedItemData item) {
+        return item == null ? null : item.toBase64();
+    }
+
+    private static SerializedItemData readSerializedItem(JsonObject obj, String key) {
+        return SerializedItemData.fromBase64(optString(obj, key));
+    }
+
+    private static List<SerializedItemData> readSerializedItemList(JsonObject obj, String key) {
+        List<String> values = readStringList(obj, key);
+        List<SerializedItemData> items = new ArrayList<>(values.size());
+        for (String value : values) {
+            items.add(SerializedItemData.fromBase64(value));
+        }
+        return List.copyOf(items);
     }
 }

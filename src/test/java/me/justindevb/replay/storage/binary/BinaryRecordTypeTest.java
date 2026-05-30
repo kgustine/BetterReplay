@@ -1,6 +1,7 @@
 package me.justindevb.replay.storage.binary;
 
 import me.justindevb.replay.recording.TimelineEvent;
+import me.justindevb.replay.util.io.SerializedItemData;
 import org.junit.jupiter.api.Test;
 
 import java.util.Arrays;
@@ -16,8 +17,8 @@ class BinaryRecordTypeTest {
     void definesStableTagsForEveryTimelineEventSubtype() {
         assertEquals(0x01, BinaryRecordType.PLAYER_MOVE.tag());
         assertEquals(0x02, BinaryRecordType.ENTITY_MOVE.tag());
-        assertEquals(0x03, BinaryRecordType.INVENTORY_UPDATE.tag());
-        assertEquals(0x04, BinaryRecordType.HELD_ITEM_CHANGE.tag());
+        assertEquals(0x03, BinaryRecordType.INVENTORY_STORAGE_UPDATE.tag());
+        assertEquals(0x04, BinaryRecordType.EQUIPMENT_STATE_UPDATE.tag());
         assertEquals(0x05, BinaryRecordType.BLOCK_BREAK.tag());
         assertEquals(0x06, BinaryRecordType.BLOCK_BREAK_COMPLETE.tag());
         assertEquals(0x07, BinaryRecordType.BLOCK_BREAK_STAGE.tag());
@@ -65,8 +66,19 @@ class BinaryRecordTypeTest {
         List<TimelineEvent> samples = List.of(
                 new TimelineEvent.PlayerMove(0, "u1", "Steve", "world", 1.0, 2.0, 3.0, 4.0f, 5.0f, "STANDING"),
                 new TimelineEvent.EntityMove(1, "u2", "ZOMBIE", "world", 1.0, 2.0, 3.0, 4.0f, 5.0f),
-                new TimelineEvent.InventoryUpdate(2, "u3", "mh", "oh", List.of("a"), List.of("c")),
-                new TimelineEvent.HeldItemChange(3, "u4", "mh", "oh"),
+            new TimelineEvent.InventoryStorageUpdate(2, "u3", List.of(SerializedItemData.fromBytes(new byte[] {1}))),
+            new TimelineEvent.EquipmentStateUpdate(
+                3,
+                "u4",
+                1,
+                SerializedItemData.fromBytes(new byte[] {2}),
+                SerializedItemData.fromBytes(new byte[] {3}),
+                List.of(
+                    SerializedItemData.fromBytes(new byte[] {4}),
+                    SerializedItemData.fromBytes(new byte[] {5}),
+                    SerializedItemData.fromBytes(new byte[] {6}),
+                    SerializedItemData.fromBytes(new byte[] {7})
+                )),
                 new TimelineEvent.BlockBreak(4, "u5", "world", 1, 2, 3, "minecraft:stone"),
                 new TimelineEvent.BlockBreakComplete(5, "u6", "world", 1, 2, 3),
                 new TimelineEvent.BlockBreakStage(6, null, "world", 1, 2, 3, 4),

@@ -4,6 +4,7 @@ import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import me.justindevb.replay.util.io.SerializedItemData;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -27,6 +28,10 @@ class TimelineEventAdapterTest {
     private JsonObject toJson(TimelineEvent event) {
         String json = gson.toJson(event, TimelineEvent.class);
         return JsonParser.parseString(json).getAsJsonObject();
+    }
+
+    private static SerializedItemData slot(byte... bytes) {
+        return SerializedItemData.fromBytes(bytes);
     }
 
     // ── PlayerMove ────────────────────────────────────────────
@@ -89,32 +94,57 @@ class TimelineEventAdapterTest {
         }
     }
 
-    // ── InventoryUpdate ───────────────────────────────────────
+    // ── InventoryStorageUpdate ────────────────────────────────
 
     @Nested
-    class InventoryUpdateTests {
+    class InventoryStorageUpdateTests {
         @Test
         void roundtrip() {
-            var original = new TimelineEvent.InventoryUpdate(
-                    5, "uuid-3", "main-hand-data", "off-hand-data",
-                    List.of("boots", "legs", "chest", "helmet"),
-                    List.of("slot0", "slot1", "slot2"));
-            var restored = (TimelineEvent.InventoryUpdate) TimelineEventAdapterTest.this.roundtrip(original);
+            var original = new TimelineEvent.InventoryStorageUpdate(
+                    5,
+                    "uuid-3",
+                    List.of(slot((byte) 1), slot((byte) 2), SerializedItemData.empty()));
+            var restored = (TimelineEvent.InventoryStorageUpdate) TimelineEventAdapterTest.this.roundtrip(original);
 
-            assertEquals(original.mainHand(), restored.mainHand());
-            assertEquals(original.offHand(), restored.offHand());
-            assertEquals(original.armor(), restored.armor());
-            assertEquals(original.contents(), restored.contents());
+            assertEquals(original.storage(), restored.storage());
         }
 
         @Test
-        void deserialize_missingArmorAndContents() {
+        void jsonType() {
+            var event = new TimelineEvent.InventoryStorageUpdate(0, "u", List.of(slot((byte) 1)));
+            assertEquals("inventory_storage_update", toJson(event).get("type").getAsString());
+        }
+    }
+
+    @Nested
+    class EquipmentStateUpdateTests {
+        @Test
+        void roundtrip() {
+            var original = new TimelineEvent.EquipmentStateUpdate(
+                    5,
+                    "uuid-3",
+                    2,
+                    slot((byte) 3),
+                    slot((byte) 4),
+                    List.of(slot((byte) 5), slot((byte) 6), slot((byte) 7), slot((byte) 8)));
+            var restored = (TimelineEvent.EquipmentStateUpdate) TimelineEventAdapterTest.this.roundtrip(original);
+
+            assertEquals(original.heldSlot(), restored.heldSlot());
+            assertEquals(original.mainHand(), restored.mainHand());
+            assertEquals(original.offHand(), restored.offHand());
+            assertEquals(original.armor(), restored.armor());
+        }
+
+        @Test
+        void deserialize_missingArmor_defaultsToEmptyList() {
             String json = """
-                    {"type":"inventory_update","tick":0,"uuid":"u","mainHand":"mh","offHand":"oh"}
+                    {"type":"equipment_state_update","tick":0,"uuid":"u","heldSlot":1,"mainHand":"AQ==","offHand":"Ag=="}
                     """;
-            TimelineEvent.InventoryUpdate event = (TimelineEvent.InventoryUpdate) gson.fromJson(json, TimelineEvent.class);
+            TimelineEvent.EquipmentStateUpdate event = (TimelineEvent.EquipmentStateUpdate) gson.fromJson(json, TimelineEvent.class);
+            assertEquals(1, event.heldSlot());
+            assertEquals(slot((byte) 1), event.mainHand());
+            assertEquals(slot((byte) 2), event.offHand());
             assertTrue(event.armor().isEmpty());
-            assertTrue(event.contents().isEmpty());
         }
     }
 

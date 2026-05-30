@@ -24,8 +24,8 @@ public final class BinaryReplayGoldenFixtureWriter {
         Files.createDirectories(outputDir);
 
         BinaryReplayStorageCodec codec = new BinaryReplayStorageCodec();
-        Files.write(outputDir.resolve("minimal-v1.br"), codec.finalizeReplay("minimal", minimalTimeline(), "1.4.0", MINIMAL_RECORDING_STARTED_AT));
-        Files.write(outputDir.resolve("seek-v1.br"), codec.finalizeReplay("seek", seekTimeline(), "1.4.0", SEEK_RECORDING_STARTED_AT));
+        Files.write(outputDir.resolve("minimal-v2.br"), codec.finalizeReplay("minimal", minimalTimeline(), "1.4.0", MINIMAL_RECORDING_STARTED_AT));
+        Files.write(outputDir.resolve("seek-v2.br"), codec.finalizeReplay("seek", seekTimeline(), "1.4.0", SEEK_RECORDING_STARTED_AT));
     }
 
     private static List<TimelineEvent> minimalTimeline() {

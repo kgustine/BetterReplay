@@ -48,7 +48,7 @@ class RecordingEventHandlerTest {
     @BeforeEach
     void setUp() {
         builder = new TimelineBuilder();
-        handler = new RecordingEventHandler(tracker, builder, () -> tick);
+        handler = new RecordingEventHandler(tracker, builder, () -> tick, uuid -> {});
     }
 
     private Player mockPlayer(UUID uuid) {

@@ -2,12 +2,13 @@ package me.justindevb.replay.recording;
 
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
-import com.google.gson.reflect.TypeToken;
+import me.justindevb.replay.storage.JsonReplayStorageCodec;
+import me.justindevb.replay.util.io.SerializedItemData;
 import me.justindevb.replay.util.VersionUtil;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 
-import java.lang.reflect.Type;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -20,7 +21,11 @@ class TimelineBackwardCompatTest {
     private final Gson gson = new GsonBuilder()
             .registerTypeHierarchyAdapter(TimelineEvent.class, new TimelineEventAdapter())
             .create();
-    private static final Type LIST_TYPE = new TypeToken<List<TimelineEvent>>() {}.getType();
+    private final JsonReplayStorageCodec codec = new JsonReplayStorageCodec();
+
+    private static SerializedItemData slot(byte... bytes) {
+        return SerializedItemData.fromBytes(bytes);
+    }
 
     // ── Missing Optional Fields ───────────────────────────────
 
@@ -68,13 +73,18 @@ class TimelineBackwardCompatTest {
         }
 
         @Test
-        void inventoryUpdate_noArmorNoContents() {
+        void legacyInventoryUpdate_upgradesToEquipmentAndStorage() throws Exception {
             String json = """
                     {"type":"inventory_update","tick":0,"uuid":"u","mainHand":"mh","offHand":"oh"}
                     """;
-            TimelineEvent.InventoryUpdate event = (TimelineEvent.InventoryUpdate) gson.fromJson(json, TimelineEvent.class);
-            assertTrue(event.armor().isEmpty());
-            assertTrue(event.contents().isEmpty());
+            List<TimelineEvent> events = codec.decodeTimeline(json.getBytes(StandardCharsets.UTF_8), "1.4.0");
+            assertEquals(2, events.size());
+            assertInstanceOf(TimelineEvent.EquipmentStateUpdate.class, events.get(0));
+            assertInstanceOf(TimelineEvent.InventoryStorageUpdate.class, events.get(1));
+            TimelineEvent.EquipmentStateUpdate equipment = (TimelineEvent.EquipmentStateUpdate) events.get(0);
+            TimelineEvent.InventoryStorageUpdate storage = (TimelineEvent.InventoryStorageUpdate) events.get(1);
+            assertEquals(4, equipment.armor().size());
+            assertEquals(36, storage.storage().size());
         }
 
         @Test
@@ -143,7 +153,7 @@ class TimelineBackwardCompatTest {
                       {"type":"player_quit","tick":5,"uuid":"u"}
                     ]
                     """;
-            List<TimelineEvent> events = VersionUtil.parseReplayJson(gson, json, "1.4.0", LIST_TYPE);
+                        List<TimelineEvent> events = assertDoesNotThrow(() -> codec.decodeTimeline(json.getBytes(StandardCharsets.UTF_8), "1.4.0"));
             assertEquals(2, events.size());
             assertInstanceOf(TimelineEvent.PlayerMove.class, events.get(0));
             assertInstanceOf(TimelineEvent.PlayerQuit.class, events.get(1));
@@ -194,7 +204,8 @@ class TimelineBackwardCompatTest {
         List<TimelineEvent> events = List.of(
                 new TimelineEvent.PlayerMove(0, "u1", "Steve", "world", 1, 64, 3, 0, 0, "STANDING"),
                 new TimelineEvent.EntityMove(1, "u2", "ZOMBIE", "world", 5, 65, 8, 180, 0),
-                new TimelineEvent.InventoryUpdate(2, "u1", "mh", "oh", List.of("b", "l", "c", "h"), List.of("s0")),
+            new TimelineEvent.EquipmentStateUpdate(2, "u1", 0, slot((byte) 1), slot((byte) 2), List.of(slot((byte) 3), slot((byte) 4), slot((byte) 5), slot((byte) 6))),
+            new TimelineEvent.InventoryStorageUpdate(2, "u1", List.of(slot((byte) 7), slot((byte) 8))),
                 new TimelineEvent.BlockBreak(3, "u1", "world", 10, 64, 20, "minecraft:stone"),
                 new TimelineEvent.BlockBreakComplete(4, "u1", "world", 10, 64, 20),
                 new TimelineEvent.BlockBreakStage(5, null, "world", 10, 64, 20, 3),
@@ -211,7 +222,7 @@ class TimelineBackwardCompatTest {
         );
 
         String json = VersionUtil.wrapTimeline(gson, events, "1.4.0");
-        List<TimelineEvent> parsed = VersionUtil.parseReplayJson(gson, json, "1.4.0", LIST_TYPE);
+    List<TimelineEvent> parsed = assertDoesNotThrow(() -> codec.decodeTimeline(json.getBytes(StandardCharsets.UTF_8), "1.4.0"));
 
         assertEquals(events.size(), parsed.size());
         for (int i = 0; i < events.size(); i++) {
