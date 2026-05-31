@@ -1,6 +1,7 @@
 package me.justindevb.replay.storage.binary;
 
 import me.justindevb.replay.recording.TimelineEvent;
+import me.justindevb.replay.util.io.SerializedItemData;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -59,19 +60,18 @@ final class BinaryReplayAppendLogCodec {
                 writeFloat(out, e.yaw());
                 writeFloat(out, e.pitch());
             }
-            case TimelineEvent.InventoryUpdate e -> {
+            case TimelineEvent.InventoryStorageUpdate e -> {
                 writeInt(out, e.tick());
                 writeStringRef(out, stringIndexer, e.uuid());
-                writeNullableStringRef(out, stringIndexer, e.mainHand());
-                writeNullableStringRef(out, stringIndexer, e.offHand());
-                writeNullableStringList(out, stringIndexer, e.armor());
-                writeNullableStringList(out, stringIndexer, e.contents());
+                writeSerializedItemList(out, e.storage());
             }
-            case TimelineEvent.HeldItemChange e -> {
+            case TimelineEvent.EquipmentStateUpdate e -> {
                 writeInt(out, e.tick());
                 writeStringRef(out, stringIndexer, e.uuid());
-                writeNullableStringRef(out, stringIndexer, e.mainHand());
-                writeNullableStringRef(out, stringIndexer, e.offHand());
+                writeInt(out, e.heldSlot());
+                writeSerializedItem(out, e.mainHand());
+                writeSerializedItem(out, e.offHand());
+                writeSerializedItemList(out, e.armor());
             }
             case TimelineEvent.BlockBreak e -> {
                 writeInt(out, e.tick());
@@ -207,23 +207,22 @@ final class BinaryReplayAppendLogCodec {
                 cursor.ensureFullyRead();
                 yield event;
             }
-            case INVENTORY_UPDATE -> {
-                TimelineEvent.InventoryUpdate event = new TimelineEvent.InventoryUpdate(
+            case INVENTORY_STORAGE_UPDATE -> {
+                TimelineEvent.InventoryStorageUpdate event = new TimelineEvent.InventoryStorageUpdate(
                         cursor.readInt(),
                         cursor.readStringRef(stringTable),
-                        cursor.readNullableStringRef(stringTable),
-                        cursor.readNullableStringRef(stringTable),
-                        cursor.readNullableStringList(stringTable),
-                        cursor.readNullableStringList(stringTable));
+                        cursor.readSerializedItemList());
                 cursor.ensureFullyRead();
                 yield event;
             }
-            case HELD_ITEM_CHANGE -> {
-                TimelineEvent.HeldItemChange event = new TimelineEvent.HeldItemChange(
+            case EQUIPMENT_STATE_UPDATE -> {
+                TimelineEvent.EquipmentStateUpdate event = new TimelineEvent.EquipmentStateUpdate(
                         cursor.readInt(),
                         cursor.readStringRef(stringTable),
-                        cursor.readNullableStringRef(stringTable),
-                        cursor.readNullableStringRef(stringTable));
+                        cursor.readInt(),
+                        cursor.readSerializedItem(),
+                        cursor.readSerializedItem(),
+                        cursor.readSerializedItemList());
                 cursor.ensureFullyRead();
                 yield event;
             }
@@ -375,6 +374,22 @@ final class BinaryReplayAppendLogCodec {
         }
     }
 
+    private static void writeSerializedItemList(ByteArrayOutputStream out, List<SerializedItemData> values) {
+        writeVarInt(out, values.size());
+        for (SerializedItemData value : values) {
+            writeSerializedItem(out, value);
+        }
+    }
+
+    private static void writeSerializedItem(ByteArrayOutputStream out, SerializedItemData item) {
+        SerializedItemData value = item == null ? SerializedItemData.empty() : item;
+        writeBoolean(out, !value.isEmpty());
+        if (!value.isEmpty()) {
+            writeVarInt(out, value.length());
+            writeBytes(out, value.bytes());
+        }
+    }
+
     private static void writeStringRef(ByteArrayOutputStream out, StringIndexer stringIndexer, String value) throws IOException {
         if (value == null) {
             throw new IllegalArgumentException("Non-null string field was null");
@@ -519,6 +534,24 @@ final class BinaryReplayAppendLogCodec {
                 values.add(readNullableStringRef(stringTable));
             }
             return values;
+        }
+
+        SerializedItemData readSerializedItem() {
+            boolean present = readBoolean();
+            if (!present) {
+                return SerializedItemData.empty();
+            }
+            int length = readVarInt();
+            return SerializedItemData.fromBytes(readBytes(length));
+        }
+
+        List<SerializedItemData> readSerializedItemList() {
+            int size = readVarInt();
+            List<SerializedItemData> values = new ArrayList<>(size);
+            for (int index = 0; index < size; index++) {
+                values.add(readSerializedItem());
+            }
+            return List.copyOf(values);
         }
 
         byte[] remainingBytes() {

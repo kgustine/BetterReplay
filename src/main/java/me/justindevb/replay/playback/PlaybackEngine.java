@@ -94,11 +94,11 @@ public class PlaybackEngine {
                 entity.destroy();
                 recordedEntities.remove(entity.getUuid());
             }
-            case TimelineEvent.InventoryUpdate e -> {
-                if (entity instanceof RecordedPlayer rp) rp.updateInventory(e);
+            case TimelineEvent.InventoryStorageUpdate e -> {
+                if (entity instanceof RecordedPlayer rp) rp.updateStorage(e);
             }
-            case TimelineEvent.HeldItemChange e -> {
-                if (entity instanceof RecordedPlayer rp) rp.updateHeldItems(e);
+            case TimelineEvent.EquipmentStateUpdate e -> {
+                if (entity instanceof RecordedPlayer rp) rp.updateEquipment(e);
             }
             case TimelineEvent.ItemDrop e -> {
                 ItemStack stack = deserializeItem(e.item());

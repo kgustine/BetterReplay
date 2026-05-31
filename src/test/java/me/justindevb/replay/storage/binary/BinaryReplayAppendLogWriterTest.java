@@ -1,6 +1,7 @@
 package me.justindevb.replay.storage.binary;
 
 import me.justindevb.replay.recording.TimelineEvent;
+import me.justindevb.replay.util.io.SerializedItemData;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -111,5 +112,42 @@ class BinaryReplayAppendLogWriterTest {
 
         assertEquals(RECORDING_STARTED_AT, recovery.header().recordingStartedAtEpochMillis());
         assertEquals(List.of(new TimelineEvent.PlayerQuit(0, "uuid-1")), recovery.timeline());
+    }
+
+    @Test
+    void roundTripsSplitInventoryEventsWithRawItemPayloads() throws Exception {
+        Path path = tempDir.resolve("inventory.appendlog");
+        BinaryReplayAppendLogReader reader = new BinaryReplayAppendLogReader();
+
+        TimelineEvent.EquipmentStateUpdate equipment = new TimelineEvent.EquipmentStateUpdate(
+                2,
+                "uuid-1",
+                4,
+                SerializedItemData.fromBytes(new byte[] {1, 2, 3}),
+                SerializedItemData.fromBytes(new byte[] {4, 5, 6}),
+                List.of(
+                        SerializedItemData.fromBytes(new byte[] {7}),
+                        SerializedItemData.fromBytes(new byte[] {8}),
+                        SerializedItemData.fromBytes(new byte[] {9}),
+                        SerializedItemData.empty()
+                ));
+        TimelineEvent.InventoryStorageUpdate storage = new TimelineEvent.InventoryStorageUpdate(
+                2,
+                "uuid-1",
+                List.of(
+                        SerializedItemData.fromBytes(new byte[] {10, 11}),
+                        SerializedItemData.empty(),
+                        SerializedItemData.fromBytes(new byte[] {12, 13, 14})
+                ));
+
+        try (BinaryReplayAppendLogWriter writer = new BinaryReplayAppendLogWriter(path, RECORDING_STARTED_AT)) {
+            writer.append(equipment);
+            writer.append(storage);
+            writer.flush();
+        }
+
+        List<TimelineEvent> timeline = reader.readTimeline(path);
+
+        assertEquals(List.of(equipment, storage), timeline);
     }
 }

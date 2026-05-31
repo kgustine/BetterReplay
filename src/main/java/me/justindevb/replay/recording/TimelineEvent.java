@@ -1,5 +1,7 @@
 package me.justindevb.replay.recording;
 
+import me.justindevb.replay.util.io.SerializedItemData;
+
 import java.util.List;
 
 /**
@@ -32,10 +34,13 @@ public sealed interface TimelineEvent {
 
     // ── Inventory ─────────────────────────────────────────────
 
-    record InventoryUpdate(int tick, String uuid, String mainHand, String offHand,
-                           List<String> armor, List<String> contents) implements TimelineEvent {}
+    record InventoryStorageUpdate(int tick, String uuid,
+                                  List<SerializedItemData> storage) implements TimelineEvent {}
 
-    record HeldItemChange(int tick, String uuid, String mainHand, String offHand) implements TimelineEvent {}
+    record EquipmentStateUpdate(int tick, String uuid, int heldSlot,
+                                SerializedItemData mainHand,
+                                SerializedItemData offHand,
+                                List<SerializedItemData> armor) implements TimelineEvent {}
 
     // ── Blocks ────────────────────────────────────────────────
 

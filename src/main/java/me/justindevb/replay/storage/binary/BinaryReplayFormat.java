@@ -6,7 +6,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.HexFormat;
 
 /**
- * Central binary replay format constants for BetterReplay's v1 .br archives.
+ * Central binary replay format constants for BetterReplay's v2 .br archives.
  */
 public final class BinaryReplayFormat {
 
@@ -18,7 +18,7 @@ public final class BinaryReplayFormat {
     public static final String RESERVED_META_PREFIX = "meta/";
     public static final String CHUNK_REGION_FILE_EXTENSION = ".brregion";
 
-    public static final int FORMAT_VERSION = 1;
+    public static final int FORMAT_VERSION = 2;
     public static final String PAYLOAD_CHECKSUM_ALGORITHM = "CRC32C";
 
         public static final byte[] APPEND_LOG_MAGIC = new byte[] {'B', 'R', 'A', 'L'};

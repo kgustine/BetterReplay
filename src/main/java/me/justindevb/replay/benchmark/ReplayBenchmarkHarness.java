@@ -5,6 +5,7 @@ import me.justindevb.replay.recording.TimelineEvent;
 import me.justindevb.replay.storage.ReplayExporter;
 import me.justindevb.replay.storage.ReplayIndexedTimeline;
 import me.justindevb.replay.storage.binary.BinaryReplayStorageCodec;
+import me.justindevb.replay.util.io.SerializedItemData;
 
 import java.io.File;
 import java.io.IOException;
@@ -154,10 +155,26 @@ public final class ReplayBenchmarkHarness {
                             "minecraft:oak_planks", "minecraft:air"));
                 }
                 if (tick > 0 && tick % 400 == 0) {
-                    timeline.add(new TimelineEvent.InventoryUpdate(tick, uuid,
-                            "minecraft:diamond_sword", "minecraft:shield",
-                            List.of("minecraft:diamond_helmet", "minecraft:diamond_chestplate", "minecraft:diamond_leggings", "minecraft:diamond_boots"),
-                            List.of("minecraft:diamond_sword", "minecraft:golden_apple", "minecraft:cobblestone")));
+                    timeline.add(new TimelineEvent.EquipmentStateUpdate(
+                        tick,
+                        uuid,
+                        0,
+                        SerializedItemData.fromBytes(new byte[] {1, 2, 3}),
+                        SerializedItemData.fromBytes(new byte[] {4, 5}),
+                        List.of(
+                            SerializedItemData.fromBytes(new byte[] {6}),
+                            SerializedItemData.fromBytes(new byte[] {7}),
+                            SerializedItemData.fromBytes(new byte[] {8}),
+                            SerializedItemData.fromBytes(new byte[] {9})
+                        )));
+                    timeline.add(new TimelineEvent.InventoryStorageUpdate(
+                        tick,
+                        uuid,
+                        List.of(
+                            SerializedItemData.fromBytes(new byte[] {1, 1}),
+                            SerializedItemData.fromBytes(new byte[] {2, 2}),
+                            SerializedItemData.fromBytes(new byte[] {3, 3})
+                        )));
                 }
             }
             timeline.add(new TimelineEvent.PlayerQuit(preset.durationTicks(), uuid));

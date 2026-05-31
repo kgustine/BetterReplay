@@ -20,7 +20,7 @@ class BinaryReplayFormatTest {
         assertEquals("chunks/", BinaryReplayFormat.RESERVED_CHUNKS_PREFIX);
         assertEquals("meta/", BinaryReplayFormat.RESERVED_META_PREFIX);
         assertEquals(".brregion", BinaryReplayFormat.CHUNK_REGION_FILE_EXTENSION);
-        assertEquals(1, BinaryReplayFormat.FORMAT_VERSION);
+        assertEquals(2, BinaryReplayFormat.FORMAT_VERSION);
         assertEquals("CRC32C", BinaryReplayFormat.PAYLOAD_CHECKSUM_ALGORITHM);
         assertArrayEquals(new byte[] {'B', 'R', 'A', 'L'}, BinaryReplayFormat.appendLogMagicBytes());
         assertEquals(16, BinaryReplayFormat.APPEND_LOG_HEADER_SIZE);

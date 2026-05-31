@@ -15,11 +15,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Finalized binary `.br` replay storage for file and MySQL backends, including crash-safe append-log recording, lazy indexed loading, preserved recording start timestamps, startup recovery of orphaned temp logs, filtered export tooling, hidden benchmark/debug utilities, and temporary legacy JSON compatibility during migration
 - Replay protection commands and metadata, protected replay highlighting in `/replay list`, and config-driven retention cleanup with duration parsing
 - Optional chunk baseline capture and chunk-aware playback for binary replays, including block-entity support, replay chunk caching, `Playback.Chunk-View-Radius`, `Playback.Chunk-Send-Limit-Per-Tick`, `Playback.Chunk-Clear-Limit-Per-Tick`, `Playback.Chunk-Timing-Diagnostics`, and `Playback.Chunk-Mode`
+- Split inventory recording into dedicated equipment-state and storage-snapshot events backed by raw item bytes, plus regression coverage for the new binary payloads and legacy JSON upgrade path
 
 ### Fixed
 - `activeSessions` in `RecorderManager` changed to `ConcurrentHashMap` to prevent `ConcurrentModificationException` (#33)
 - PacketEvents block-break recording is now rescheduled onto the server thread to avoid Netty-thread contention and unsafe shared-state mutation (#43)
 - Held-item swaps and hotbar slot changes are now captured immediately for more accurate replay inventory playback
+- Equipment polling now reuses a single per-tick capture across concurrent recordings and only falls back to clean-player sweeps periodically, reducing repeated ItemStack serialization under high recording load
+- Dirty inventory polls now reuse a shared short-lived storage snapshot cache across concurrent recordings, while clean fallback sweeps still force a fresh capture to preserve missed-change detection
 - Nested replay inventory loss when starting a replay during an active replay (#31)
 - Replay controls getting stuck after replay ends (#27)
 - Replay export now writes under the plugin data folder
@@ -36,6 +39,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Config keys for list settings were renamed from `list-page-size`/`list-protected-highlight-color` to `List.Page-Size`/`List.Protected-Highlight-Color`; values are auto-migrated on startup
 - Update checks now treat `-SNAPSHOT` builds as their corresponding release, and Modrinth publishing metadata now includes Purpur, Spigot, and Bukkit loaders
 - Modrinth uploads now publish the matching release changelog on `main` and the `[Unreleased]` section for `dev` alpha builds
+- Binary replay archives now use format version `2`; new `.br` inventory payloads store split equipment/storage slot bytes directly, while legacy JSON replay loading remains supported and older alpha `.br` inventory archives are intentionally unsupported
 
 ## [1.4.0] - 2026-04-10
 

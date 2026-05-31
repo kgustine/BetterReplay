@@ -4,6 +4,8 @@ import me.justindevb.replay.chunk.ChunkRecordingArtifacts;
 import com.tcoded.folialib.wrapper.task.WrappedTask;
 import me.justindevb.replay.api.events.RecordingStartEvent;
 import me.justindevb.replay.api.events.RecordingStopEvent;
+import me.justindevb.replay.recording.inventory.SharedEquipmentCaptureCache;
+import me.justindevb.replay.recording.inventory.SharedStorageCaptureCache;
 import me.justindevb.replay.storage.ReplaySaveRequest;
 import me.justindevb.replay.storage.binary.BinaryReplayAppendLogReader;
 import me.justindevb.replay.storage.binary.BinaryReplayAppendLogRecovery;
@@ -26,6 +28,8 @@ public class RecorderManager {
     private final Replay replay;
     private final ConcurrentHashMap<String, RecordingSession> activeSessions = new ConcurrentHashMap<>();
     private final BinaryReplayAppendLogReader appendLogReader = new BinaryReplayAppendLogReader();
+    private final SharedEquipmentCaptureCache sharedEquipmentCaptureCache = new SharedEquipmentCaptureCache();
+    private final SharedStorageCaptureCache sharedStorageCaptureCache = new SharedStorageCaptureCache();
     private WrappedTask tickTask;
 
     public RecorderManager(Replay replay) {
@@ -37,7 +41,7 @@ public class RecorderManager {
             return false;
         }
 
-        RecordingSession session = new RecordingSession(name, replay.getDataFolder(), players, durationSeconds);
+        RecordingSession session = new RecordingSession(name, replay.getDataFolder(), players, durationSeconds, sharedStorageCaptureCache);
         session.start();
 
         Bukkit.getPluginManager().callEvent(new RecordingStartEvent(name, players, session, durationSeconds));
@@ -69,11 +73,13 @@ public class RecorderManager {
     }
 
     private void tickAll() {
+        sharedEquipmentCaptureCache.beginTick();
+
         Iterator<Map.Entry<String, RecordingSession>> it = activeSessions.entrySet().iterator();
         while (it.hasNext()) {
             Map.Entry<String, RecordingSession> entry = it.next();
             RecordingSession session = entry.getValue();
-            session.tick();
+            session.tick(sharedEquipmentCaptureCache);
             if (session.isStopped()) {
                 it.remove();
             }

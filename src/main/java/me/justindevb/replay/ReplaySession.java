@@ -237,8 +237,14 @@ public class ReplaySession implements Listener, PacketListener {
                     recordedEntities.put(uuid, recorded);
 
                     if (recorded instanceof RecordedPlayer rp) {
-                        TimelineEvent.InventoryUpdate inv = getInventorySnapshotForPlayer(uuid);
-                        if (inv != null) rp.updateInventory(inv);
+                        TimelineEvent.InventoryStorageUpdate storage = getInventoryStorageSnapshotForPlayer(uuid);
+                        if (storage != null) {
+                            rp.updateStorage(storage);
+                        }
+                        TimelineEvent.EquipmentStateUpdate equipment = getEquipmentStateForPlayer(uuid);
+                        if (equipment != null) {
+                            rp.updateEquipment(equipment);
+                        }
                     }
                 }
 
@@ -352,8 +358,8 @@ public class ReplaySession implements Listener, PacketListener {
     private void syncEntityStatesAtIndex(int targetIndex) {
         Map<UUID, TimelineEvent> firstEventByUUID = new LinkedHashMap<>();
         Map<UUID, TimelineEvent> lastLocationByUUID = new LinkedHashMap<>();
-        Map<UUID, TimelineEvent.InventoryUpdate> lastInventoryByUUID = new LinkedHashMap<>();
-        Map<UUID, TimelineEvent.HeldItemChange> lastHeldItemByUUID = new LinkedHashMap<>();
+        Map<UUID, TimelineEvent.InventoryStorageUpdate> lastInventoryByUUID = new LinkedHashMap<>();
+        Map<UUID, TimelineEvent.EquipmentStateUpdate> lastEquipmentByUUID = new LinkedHashMap<>();
         Set<UUID> shouldHaveQuitAtTarget = new HashSet<>();
         Set<UUID> shouldBeDeadAtTarget = new HashSet<>();
 
@@ -374,8 +380,8 @@ public class ReplaySession implements Listener, PacketListener {
             switch (event) {
                 case TimelineEvent.PlayerMove ignored2 -> lastLocationByUUID.put(uuid, event);
                 case TimelineEvent.EntityMove ignored2 -> lastLocationByUUID.put(uuid, event);
-                case TimelineEvent.InventoryUpdate inv -> lastInventoryByUUID.put(uuid, inv);
-                case TimelineEvent.HeldItemChange hic -> lastHeldItemByUUID.put(uuid, hic);
+                case TimelineEvent.InventoryStorageUpdate inv -> lastInventoryByUUID.put(uuid, inv);
+                case TimelineEvent.EquipmentStateUpdate equipment -> lastEquipmentByUUID.put(uuid, equipment);
                 case TimelineEvent.PlayerQuit ignored2 -> shouldHaveQuitAtTarget.add(uuid);
                 case TimelineEvent.EntityDeath ignored2 -> shouldBeDeadAtTarget.add(uuid);
                 default -> {}
@@ -425,17 +431,17 @@ public class ReplaySession implements Listener, PacketListener {
             entity.moveTo(loc);
         }
 
-        for (Map.Entry<UUID, TimelineEvent.InventoryUpdate> entry : lastInventoryByUUID.entrySet()) {
+        for (Map.Entry<UUID, TimelineEvent.InventoryStorageUpdate> entry : lastInventoryByUUID.entrySet()) {
             RecordedEntity entity = recordedEntities.get(entry.getKey());
             if (entity instanceof RecordedPlayer rp) {
-                rp.updateInventory(entry.getValue());
+                rp.updateStorage(entry.getValue());
             }
         }
 
-        for (Map.Entry<UUID, TimelineEvent.HeldItemChange> entry : lastHeldItemByUUID.entrySet()) {
+        for (Map.Entry<UUID, TimelineEvent.EquipmentStateUpdate> entry : lastEquipmentByUUID.entrySet()) {
             RecordedEntity entity = recordedEntities.get(entry.getKey());
             if (entity instanceof RecordedPlayer rp) {
-                rp.updateHeldItems(entry.getValue());
+                rp.updateEquipment(entry.getValue());
             }
         }
     }
@@ -450,12 +456,23 @@ public class ReplaySession implements Listener, PacketListener {
         trackedEntityIds.clear();
     }
 
-    private TimelineEvent.InventoryUpdate getInventorySnapshotForPlayer(UUID uuid) {
+    private TimelineEvent.InventoryStorageUpdate getInventoryStorageSnapshotForPlayer(UUID uuid) {
         String uuidStr = uuid.toString();
         for (TimelineEvent event : timeline) {
-            if (event instanceof TimelineEvent.InventoryUpdate inv
+            if (event instanceof TimelineEvent.InventoryStorageUpdate inv
                     && uuidStr.equals(inv.uuid())) {
                 return inv;
+            }
+        }
+        return null;
+    }
+
+    private TimelineEvent.EquipmentStateUpdate getEquipmentStateForPlayer(UUID uuid) {
+        String uuidStr = uuid.toString();
+        for (TimelineEvent event : timeline) {
+            if (event instanceof TimelineEvent.EquipmentStateUpdate equipment
+                    && uuidStr.equals(equipment.uuid())) {
+                return equipment;
             }
         }
         return null;
