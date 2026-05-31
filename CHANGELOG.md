@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Variable playback speed controls during active replay; adjust with `⏪ Slower`/`⏩ Faster` inventory buttons (slots 6–7) using configurable step increments
 - Current playback speed displayed in the action bar as `[X.Xx]` during playback
 - New config keys `Playback.Speed-Step` (default `0.2`) and `Playback.Max-Speed` (default `1.0`) to control speed increment and upper bound
+- Replay viewer safety controls: `Playback.Viewer-Safety-Mode`, `Playback.Restore-Viewer-Location-On-Stop`, `Playback.Restore-Viewer-GameMode-On-Stop`, `Playback.Restore-Viewer-Flight-On-Stop`, and `Playback.Restore-Viewer-State-On-Rejoin`
 - Finalized binary `.br` replay storage for file and MySQL backends, including crash-safe append-log recording, lazy indexed loading, preserved recording start timestamps, startup recovery of orphaned temp logs, filtered export tooling, hidden benchmark/debug utilities, and temporary legacy JSON compatibility during migration
 - Replay protection commands and metadata, protected replay highlighting in `/replay list`, and config-driven retention cleanup with duration parsing
 - Optional chunk baseline capture and chunk-aware playback for binary replays, including block-entity support, replay chunk caching, `Playback.Chunk-View-Radius`, `Playback.Chunk-Send-Limit-Per-Tick`, `Playback.Chunk-Clear-Limit-Per-Tick`, `Playback.Chunk-Timing-Diagnostics`, and `Playback.Chunk-Mode`
@@ -24,6 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Equipment polling now reuses a single per-tick capture across concurrent recordings and only falls back to clean-player sweeps periodically, reducing repeated ItemStack serialization under high recording load
 - Dirty inventory polls now reuse a shared short-lived storage snapshot cache across concurrent recordings, while clean fallback sweeps still force a fresh capture to preserve missed-change detection
 - Nested replay inventory loss when starting a replay during an active replay (#31)
+- Replay playback now returns viewers to their original location and gameplay state by default, including disconnect/rejoin recovery
 - Replay controls getting stuck after replay ends (#27)
 - Replay export now writes under the plugin data folder
 - Chunk playback restore flow now handles unload timing and viewer return cases more reliably

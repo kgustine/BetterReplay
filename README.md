@@ -205,6 +205,11 @@ Playback diagnostics key:
 Playback:
   Speed-Step: 0.2
   Max-Speed: 1.0
+  Viewer-Safety-Mode: creative
+  Restore-Viewer-Location-On-Stop: true
+  Restore-Viewer-GameMode-On-Stop: true
+  Restore-Viewer-Flight-On-Stop: true
+  Restore-Viewer-State-On-Rejoin: true
   Chunk-Mode: 1
   Chunk-View-Radius: 3
   Chunk-Send-Limit-Per-Tick: 1
@@ -244,6 +249,11 @@ Notes:
 - `Recording.Chunk-Capture.Capture-Interval-Ticks` controls how often the plugin recomputes chunk interest and exports newly discovered chunks.
 - `Recording.Chunk-Capture.Max-Unique-Chunks-Per-Recording` bounds capture size; once the cap is reached, recording continues but additional chunk baselines are skipped.
 - `Playback.Chunk-View-Radius` controls the replay viewer's chunk playback radius independently from recording capture radius. Default is `3`.
+- `Playback.Viewer-Safety-Mode` controls how BetterReplay protects the real viewer when a replay starts. Default is `creative`, which switches the viewer into creative before teleporting them into replay space; set it to `off` to preserve the viewer's current mode.
+- `Playback.Restore-Viewer-Location-On-Stop` returns the viewer to their original live-world location when replay playback ends. Default is `true`.
+- `Playback.Restore-Viewer-GameMode-On-Stop` restores the viewer's original game mode after replay playback ends. Default is `true`.
+- `Playback.Restore-Viewer-Flight-On-Stop` restores the viewer's original `allowFlight` and `flying` flags after replay playback ends. Default is `true`.
+- `Playback.Restore-Viewer-State-On-Rejoin` reapplies the saved live-world location and mode if the viewer disconnects during replay and later rejoins. Default is `true`.
 - `Playback.Chunk-Mode` controls replay chunk teardown semantics. `1` keeps the current moving replay window and restores live chunks as they leave that window. `2` defers live chunk restore until replay stop, lets Paper and the client unload chunks naturally, and resends replay chunks if the viewer returns after a natural unload. Default is `1`.
 - `Playback.Chunk-Send-Limit-Per-Tick` and `Playback.Chunk-Clear-Limit-Per-Tick` control how aggressively packet-friendly chunk playback fills and clears the replay viewer's chunk window. Both default to `1`; dedicated replay servers can raise them to support larger view radii with less concern about live server impact. Replay-load probing runs at `10x` the configured send limit so uncaptured chunks can be ruled out quickly without waiting on the actual packet send rate.
 - If `Playback.Chunk-View-Radius` is larger than `Recording.Chunk-Capture.Radius`, only chunks that were actually captured during recording can be replayed; uncaptured chunks stay on the live world view.

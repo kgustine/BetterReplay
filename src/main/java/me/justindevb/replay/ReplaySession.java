@@ -13,9 +13,12 @@ import me.justindevb.replay.entity.RecordedPlayer;
 import me.justindevb.replay.api.events.ReplayStartEvent;
 import me.justindevb.replay.api.events.ReplayStopEvent;
 import me.justindevb.replay.chunk.ReplayChunkData;
+import me.justindevb.replay.config.ReplayConfigSetting;
 import me.justindevb.replay.playback.PlaybackEngine;
 import me.justindevb.replay.playback.ReplayBlockManager;
 import me.justindevb.replay.playback.ReplayInventoryUI;
+import me.justindevb.replay.playback.ReplayViewerState;
+import me.justindevb.replay.playback.ReplayViewerStateManager;
 import me.justindevb.replay.recording.TimelineEvent;
 import me.justindevb.replay.storage.ReplayPlaybackData;
 import net.kyori.adventure.text.Component;
@@ -54,11 +57,17 @@ public class ReplaySession implements Listener, PacketListener {
     private final double speedStep;
     private final double maxSpeed;
     private double accumulatedTicks = 0.0;
+    private ReplayViewerState savedViewerState;
+    private boolean suppressInventoryRestore = false;
+    private boolean suppressViewerStateRestore = false;
+    private boolean suppressStopMessage = false;
+    private boolean queueViewerStateRestoreOnRejoin = false;
 
     // Delegates
     private final ReplayBlockManager blockManager;
     private final PlaybackEngine playbackEngine;
     private final ReplayInventoryUI inventoryUI;
+    private final ReplayViewerStateManager viewerStateManager;
 
     public ReplaySession(List<TimelineEvent> timeline, Player viewer, Replay replay) {
         this(new ReplayPlaybackData(timeline), viewer, replay);
@@ -71,9 +80,10 @@ public class ReplaySession implements Listener, PacketListener {
         this.timeline = replayData.timeline();
         this.chunkData = replayData.chunkData();
 
-        this.speedStep = replay.getConfig().getDouble("Playback.Speed-Step", 0.2);
-        this.maxSpeed = Math.max(1.0D, replay.getConfig().getDouble("Playback.Max-Speed", 1.0D));
+        this.speedStep = ReplayConfigSetting.PLAYBACK_SPEED_STEP.getDouble(replay.getConfig());
+        this.maxSpeed = Math.max(1.0D, ReplayConfigSetting.PLAYBACK_MAX_SPEED.getDouble(replay.getConfig()));
         this.playbackSpeed = 1.0D;
+        this.viewerStateManager = replay.getReplayViewerStateManager();
 
         this.blockManager = new ReplayBlockManager(viewer, replay, chunkData);
         this.playbackEngine = new PlaybackEngine(viewer, replay, trackedEntityIds, deadEntities, recordedEntities, blockManager);
@@ -104,14 +114,20 @@ public class ReplaySession implements Listener, PacketListener {
         }
 
         ReplaySession existingSession = ReplayRegistry.getSessionForViewer(viewer);
+        if (existingSession != null) {
+            inventoryUI.transferSavedInventory(existingSession.getInventoryUI());
+            transferSavedViewerState(existingSession);
+            existingSession.prepareForHandoff();
+            existingSession.stop();
+        } else {
+            inventoryUI.copyInventory();
+            captureViewerState();
+        }
+
         ReplayRegistry.add(this);
         timeline = blockManager.enrichBlockBreakStageTimeline(timeline);
         blockManager.configureChunkReplayContext(timeline, () -> tick);
-        if (existingSession != null) {
-            inventoryUI.transferSavedInventory(existingSession.getInventoryUI());
-        } else {
-            inventoryUI.copyInventory();
-        }
+        applyReplayViewerSafety();
 
         TimelineEvent firstLocationEvent = timeline.stream()
                 .filter(e -> e instanceof TimelineEvent.PlayerMove || e instanceof TimelineEvent.EntityMove
@@ -271,13 +287,20 @@ public class ReplaySession implements Listener, PacketListener {
             blockManager.incrementEpoch();
             blockManager.clearAllVisibleBreakStages();
             blockManager.restoreSessionBaseline();
-            inventoryUI.restoreInventory();
+            if (!suppressInventoryRestore) {
+                inventoryUI.restoreInventory();
+            }
+            if (!suppressViewerStateRestore) {
+                restoreViewerState();
+            }
             if (replayTask != null) {
                 replay.getFoliaLib().getScheduler().cancelTask(replayTask);
                 replayTask = null;
             }
 
-            viewer.sendMessage("Replay finished");
+            if (!suppressStopMessage && viewer.isOnline()) {
+                viewer.sendMessage("Replay finished");
+            }
         } finally {
             ReplayRegistry.remove(this);
             HandlerList.unregisterAll(this);
@@ -519,6 +542,44 @@ public class ReplaySession implements Listener, PacketListener {
         return Math.max(0, Math.min(result, timeline.size()));
     }
 
+    private void prepareForHandoff() {
+        suppressInventoryRestore = true;
+        suppressViewerStateRestore = true;
+        suppressStopMessage = true;
+    }
+
+    private void captureViewerState() {
+        viewerStateManager.clearPendingRestore(viewer.getUniqueId());
+        savedViewerState = viewerStateManager.capture(viewer);
+    }
+
+    private void transferSavedViewerState(ReplaySession other) {
+        viewerStateManager.clearPendingRestore(viewer.getUniqueId());
+        savedViewerState = other.savedViewerState != null
+                ? other.savedViewerState
+                : viewerStateManager.capture(viewer);
+    }
+
+    private void applyReplayViewerSafety() {
+        viewerStateManager.applyReplaySafety(viewer);
+    }
+
+    private void restoreViewerState() {
+        if (savedViewerState == null) {
+            return;
+        }
+
+        if ((queueViewerStateRestoreOnRejoin || !viewer.isOnline())
+                && ReplayConfigSetting.PLAYBACK_RESTORE_VIEWER_STATE_ON_REJOIN.getBoolean(replay.getConfig())) {
+            viewerStateManager.queuePendingRestore(viewer.getUniqueId(), savedViewerState);
+        } else if (!queueViewerStateRestoreOnRejoin) {
+            viewerStateManager.restoreViewerState(viewer, savedViewerState);
+        }
+
+        savedViewerState = null;
+        queueViewerStateRestoreOnRejoin = false;
+    }
+
     private boolean isActive() {
         return ReplayRegistry.contains(this);
     }
@@ -563,8 +624,10 @@ public class ReplaySession implements Listener, PacketListener {
 
     @EventHandler
     public void onPlayerQuit(PlayerQuitEvent event) {
-        if (event.getPlayer().equals(viewer))
+        if (event.getPlayer().equals(viewer)) {
+            queueViewerStateRestoreOnRejoin = true;
             stop();
+        }
     }
 
     @EventHandler(priority = EventPriority.MONITOR)

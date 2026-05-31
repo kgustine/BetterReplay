@@ -18,6 +18,7 @@ import me.justindevb.replay.config.ReplayConfigSetting;
 import me.justindevb.replay.debug.ReplayDebugCommand;
 import me.justindevb.replay.export.ReplayExportCommand;
 import me.justindevb.replay.listeners.PacketEventsListener;
+import me.justindevb.replay.playback.ReplayViewerStateManager;
 import me.justindevb.replay.retention.ReplayRetentionService;
 import me.justindevb.replay.retention.RetentionPolicy;
 import me.justindevb.replay.util.ReplayCache;
@@ -45,6 +46,7 @@ public class Replay extends JavaPlugin {
     private FoliaLib foliaLib;
     private ReplayBenchmarkService replayBenchmarkService;
     private ReplayRetentionService replayRetentionService;
+    private ReplayViewerStateManager replayViewerStateManager;
 
     @Override
     public void onLoad() {
@@ -65,6 +67,8 @@ public class Replay extends JavaPlugin {
         recorderManager = new RecorderManager(this);
         manager = new ReplayManagerImpl(this, recorderManager);
         initConfig();
+        replayViewerStateManager = new ReplayViewerStateManager(this);
+        getServer().getPluginManager().registerEvents(replayViewerStateManager, this);
         replayBenchmarkService = createReplayBenchmarkService();
         ReplayCommand replayCommand = new ReplayCommand(manager,
             new ReplayBenchmarkCommand(replayBenchmarkService, foliaLib, getLogger()),
@@ -192,6 +196,10 @@ public class Replay extends JavaPlugin {
 
     public FoliaLib getFoliaLib() {
         return foliaLib;
+    }
+
+    public ReplayViewerStateManager getReplayViewerStateManager() {
+        return replayViewerStateManager;
     }
 
     private ReplayBenchmarkService createReplayBenchmarkService() {

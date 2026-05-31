@@ -1,6 +1,8 @@
 package me.justindevb.replay.config;
 
-import me.justindevb.replay.Replay;
+import org.bukkit.plugin.Plugin;
+
+import java.util.Locale;
 
 import java.io.File;
 import java.io.IOException;
@@ -13,7 +15,7 @@ import java.util.Set;
 
 public class ReplayConfigManager {
 
-    private static final int CURRENT_CONFIG_VERSION = 5;
+    private static final int CURRENT_CONFIG_VERSION = 6;
     private static final String OBSOLETE_COMPRESS_REPLAYS_KEY = "General.Compress-Replays";
     private static final String OBSOLETE_COMPRESS_REPLAYS_COMMENT = "GZIP compress replay data to save disk space.";
     private static final String LEGACY_LIST_PAGE_SIZE_KEY = "list-page-size";
@@ -27,9 +29,9 @@ public class ReplayConfigManager {
             "==========================================="
     };
 
-    private final Replay plugin;
+    private final Plugin plugin;
 
-    public ReplayConfigManager(Replay plugin) {
+    public ReplayConfigManager(Plugin plugin) {
         this.plugin = plugin;
     }
 
@@ -64,6 +66,15 @@ public class ReplayConfigManager {
             changed |= commented.setIfDifferent(ReplayConfigSetting.PLAYBACK_MAX_SPEED.getKey(), 1.0D);
         }
 
+        String configuredViewerSafetyMode = commented.getString(
+                ReplayConfigSetting.PLAYBACK_VIEWER_SAFETY_MODE.getKey(),
+                (String) ReplayConfigSetting.PLAYBACK_VIEWER_SAFETY_MODE.getDefaultValue());
+        if (!isSupportedViewerSafetyMode(configuredViewerSafetyMode)) {
+            changed |= commented.setIfDifferent(
+                    ReplayConfigSetting.PLAYBACK_VIEWER_SAFETY_MODE.getKey(),
+                    ReplayConfigSetting.PLAYBACK_VIEWER_SAFETY_MODE.getDefaultValue());
+        }
+
         int configuredChunkMode = commented.getInt(ReplayConfigSetting.PLAYBACK_CHUNK_MODE.getKey(), 1);
         if (configuredChunkMode < 1 || configuredChunkMode > 2) {
             changed |= commented.setIfDifferent(ReplayConfigSetting.PLAYBACK_CHUNK_MODE.getKey(), 1);
@@ -89,6 +100,14 @@ public class ReplayConfigManager {
         rewriteManagedComments(configFile);
 
         plugin.reloadConfig();
+    }
+
+    private boolean isSupportedViewerSafetyMode(String configuredViewerSafetyMode) {
+        if (configuredViewerSafetyMode == null) {
+            return false;
+        }
+        String normalized = configuredViewerSafetyMode.trim().toLowerCase(Locale.ROOT);
+        return "creative".equals(normalized) || "off".equals(normalized);
     }
 
     private void rewriteManagedComments(File configFile) {
