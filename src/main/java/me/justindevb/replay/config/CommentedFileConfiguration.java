@@ -110,6 +110,10 @@ public class CommentedFileConfiguration {
         return yaml.getDouble(path, defaultValue);
     }
 
+    public String getString(String path, String defaultValue) {
+        return yaml.getString(path, defaultValue);
+    }
+
     public boolean contains(String path) {
         return yaml.contains(path);
     }
