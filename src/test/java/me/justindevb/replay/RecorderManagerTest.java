@@ -14,19 +14,27 @@ import me.justindevb.replay.storage.binary.BinaryReplayAppendLogHeader;
 import me.justindevb.replay.storage.binary.BinaryReplayAppendLogWriter;
 import me.justindevb.replay.util.ReplayCache;
 import org.bukkit.Bukkit;
+import org.bukkit.Location;
+import org.bukkit.World;
 import org.bukkit.entity.Player;
+import org.bukkit.entity.Pose;
+import org.bukkit.inventory.ItemStack;
+import org.bukkit.inventory.PlayerInventory;
 import org.bukkit.plugin.PluginManager;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.mockito.ArgumentCaptor;
 import org.mockito.MockedStatic;
 
 import java.io.File;
+import java.lang.reflect.Field;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.logging.Logger;
@@ -190,6 +198,99 @@ class RecorderManagerTest {
                 request.recordingStartedAtEpochMillis() == RECORDING_STARTED_AT
                         && request.timeline().equals(List.of(new TimelineEvent.PlayerQuit(0, "uuid-1")))));
         assertFalse(appendLog.exists());
+    }
+
+    @Test
+    void tickAll_reusesEquipmentCaptureAcrossConcurrentSessions() {
+        UUID playerUuid = UUID.randomUUID();
+        Player player = mock(Player.class);
+        PlayerInventory inventory = mock(PlayerInventory.class);
+        ItemStack mainHand = mock(ItemStack.class);
+        World world = mock(World.class);
+
+        when(player.getUniqueId()).thenReturn(playerUuid);
+        when(player.isOnline()).thenReturn(true);
+        when(player.getLocation()).thenReturn(new Location(world, 0, 64, 0, 0, 0));
+        when(player.getPose()).thenReturn(Pose.STANDING);
+        when(player.getName()).thenReturn("TestPlayer");
+        when(player.getWorld()).thenReturn(world);
+        when(world.getName()).thenReturn("world");
+        when(player.getInventory()).thenReturn(inventory);
+        when(inventory.getStorageContents()).thenReturn(new ItemStack[36]);
+        when(inventory.getItemInMainHand()).thenReturn(mainHand);
+        when(inventory.getItemInOffHand()).thenReturn(null);
+        when(inventory.getHeldItemSlot()).thenReturn(0);
+        when(mainHand.isEmpty()).thenReturn(false);
+        when(mainHand.serializeAsBytes()).thenReturn(new byte[]{1});
+
+        bukkitStatic.when(() -> Bukkit.getPlayer(playerUuid)).thenReturn(player);
+
+        WrappedTask mockTask = mock(WrappedTask.class);
+        ArgumentCaptor<Runnable> tickCaptor = ArgumentCaptor.forClass(Runnable.class);
+        when(scheduler.runTimer(tickCaptor.capture(), anyLong(), anyLong())).thenReturn(mockTask);
+
+        assertTrue(manager.startSession("s1", List.of(player), -1));
+        assertTrue(manager.startSession("s2", List.of(player), -1));
+
+        clearInvocations(mainHand);
+        tickCaptor.getValue().run();
+
+        verify(mainHand, times(1)).serializeAsBytes();
+    }
+
+    @Test
+    void tickAll_reusesDirtyStorageCaptureAcrossConcurrentSessions() {
+        UUID playerUuid = UUID.randomUUID();
+        Player player = mock(Player.class);
+        PlayerInventory inventory = mock(PlayerInventory.class);
+        ItemStack storageItem = mock(ItemStack.class);
+        World world = mock(World.class);
+
+        when(player.getUniqueId()).thenReturn(playerUuid);
+        when(player.isOnline()).thenReturn(true);
+        when(player.getLocation()).thenReturn(new Location(world, 0, 64, 0, 0, 0));
+        when(player.getPose()).thenReturn(Pose.STANDING);
+        when(player.getName()).thenReturn("TestPlayer");
+        when(player.getWorld()).thenReturn(world);
+        when(world.getName()).thenReturn("world");
+        when(player.getInventory()).thenReturn(inventory);
+        when(inventory.getItemInMainHand()).thenReturn(null);
+        when(inventory.getItemInOffHand()).thenReturn(null);
+        when(inventory.getHeldItemSlot()).thenReturn(0);
+
+        ItemStack[] storageContents = new ItemStack[36];
+        storageContents[0] = storageItem;
+        when(inventory.getStorageContents()).thenReturn(storageContents);
+        when(storageItem.isEmpty()).thenReturn(false);
+        when(storageItem.serializeAsBytes()).thenReturn(new byte[]{3});
+
+        bukkitStatic.when(() -> Bukkit.getPlayer(playerUuid)).thenReturn(player);
+
+        WrappedTask mockTask = mock(WrappedTask.class);
+        ArgumentCaptor<Runnable> tickCaptor = ArgumentCaptor.forClass(Runnable.class);
+        when(scheduler.runTimer(tickCaptor.capture(), anyLong(), anyLong())).thenReturn(mockTask);
+
+        assertTrue(manager.startSession("s1", List.of(player), -1));
+        assertTrue(manager.startSession("s2", List.of(player), -1));
+        clearInvocations(storageItem);
+
+        for (RecordingSession session : manager.getActiveSessions().values()) {
+            markInventoryDirty(session, playerUuid);
+        }
+        tickCaptor.getValue().run();
+
+        verify(storageItem, times(1)).serializeAsBytes();
+    }
+
+    @SuppressWarnings("unchecked")
+    private void markInventoryDirty(RecordingSession session, UUID playerUuid) {
+        try {
+            Field field = RecordingSession.class.getDeclaredField("inventoryDirtyPlayers");
+            field.setAccessible(true);
+            ((Set<UUID>) field.get(session)).add(playerUuid);
+        } catch (ReflectiveOperationException e) {
+            throw new AssertionError("Failed to mark inventory dirty for test", e);
+        }
     }
 
     private File createAppendLog(String name, boolean cleanEof) throws Exception {

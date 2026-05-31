@@ -16,6 +16,8 @@ import me.justindevb.replay.recording.TimelineEvent;
 import me.justindevb.replay.recording.inventory.InventoryCaptureService;
 import me.justindevb.replay.recording.inventory.InventoryCaptureService.CapturedEquipmentState;
 import me.justindevb.replay.recording.inventory.InventoryCaptureService.CapturedInventoryStorageSnapshot;
+import me.justindevb.replay.recording.inventory.SharedEquipmentCaptureCache;
+import me.justindevb.replay.recording.inventory.SharedStorageCaptureCache;
 import me.justindevb.replay.storage.ReplaySaveRequest;
 import me.justindevb.replay.storage.binary.BinaryReplayAppendLogHeader;
 import me.justindevb.replay.storage.binary.BinaryReplayAppendLogRecovery;
@@ -59,20 +61,32 @@ public class RecordingSession {
     private final RecordingPacketHandler packetHandler;
     private final ChunkCaptureConfig chunkCaptureConfig;
     private final ChunkCaptureCoordinator chunkCaptureCoordinator;
+    private final SharedStorageCaptureCache sharedStorageCaptureCache;
     private PacketListenerCommon packetListenerHandle;
 
     private static final int INVENTORY_CHECK_INTERVAL = 5;
     private static final int CLEAN_INVENTORY_SWEEP_INTERVAL = 20;
+    private static final int CLEAN_EQUIPMENT_SWEEP_INTERVAL = 20;
     private final InventoryCaptureService inventoryCaptureService = new InventoryCaptureService();
+    private final SharedEquipmentCaptureCache standaloneEquipmentCaptureCache = new SharedEquipmentCaptureCache();
     private final Map<UUID, CapturedInventoryStorageSnapshot> lastInventoryStorageSnapshot = new HashMap<>();
     private final Map<UUID, CapturedEquipmentState> lastEquipmentState = new HashMap<>();
     private final Set<UUID> inventoryDirtyPlayers = new HashSet<>();
+    private final Set<UUID> equipmentDirtyPlayers = new HashSet<>();
     private int tick = 0;
     private int durationTicks = -1;
     private boolean stopped = false;
     private boolean chunkCaptureFailed = false;
 
     public RecordingSession(String name, File folder, Collection<Player> players, int durationSeconds) {
+        this(name, folder, players, durationSeconds, new SharedStorageCaptureCache());
+    }
+
+    RecordingSession(String name,
+                     File folder,
+                     Collection<Player> players,
+                     int durationSeconds,
+                     SharedStorageCaptureCache sharedStorageCaptureCache) {
         this.name = name;
         this.durationTicks = durationSeconds > 0 ? durationSeconds * 20 : -1;
         this.replay = Replay.getInstance();
@@ -80,6 +94,7 @@ public class RecordingSession {
         this.appendLogFile = new File(folder, "replays/.tmp/" + name + ".appendlog");
         this.chunkCaptureDirectory = new File(folder, "replays/.tmp/chunks/" + name);
         this.appendLogReader = new BinaryReplayAppendLogReader();
+        this.sharedStorageCaptureCache = sharedStorageCaptureCache;
         FileConfiguration config = replay.getConfig();
         this.chunkCaptureConfig = config != null ? ChunkCaptureConfig.from(config) : ChunkCaptureConfig.disabled();
 
@@ -105,7 +120,7 @@ public class RecordingSession {
 
         this.tracker = new EntityTracker(players);
         this.builder = new TimelineBuilder(appendLogWriter, false);
-        this.eventHandler = new RecordingEventHandler(tracker, builder, this::getTick, this::markInventoryDirty);
+        this.eventHandler = new RecordingEventHandler(tracker, builder, this::getTick, this::markInventoryDirty, this::markEquipmentDirty);
         this.packetHandler = new RecordingPacketHandler(
             tracker,
             builder,
@@ -127,6 +142,11 @@ public class RecordingSession {
 
     /** Called every tick by RecorderManager */
     public void tick() {
+        standaloneEquipmentCaptureCache.beginTick();
+        tick(standaloneEquipmentCaptureCache);
+    }
+
+    void tick(SharedEquipmentCaptureCache equipmentCaptureCache) {
         if (stopped) return;
 
         if (durationTicks != -1 && tick >= durationTicks) {
@@ -166,7 +186,7 @@ public class RecordingSession {
             ));
         }
 
-        tickEquipmentCheck();
+        tickEquipmentCheck(equipmentCaptureCache, tick % CLEAN_EQUIPMENT_SWEEP_INTERVAL == 0);
 
         if (tick % INVENTORY_CHECK_INTERVAL == 0) {
             tickInventoryCheck(tick % CLEAN_INVENTORY_SWEEP_INTERVAL == 0);
@@ -185,13 +205,16 @@ public class RecordingSession {
         tick++;
     }
 
-    private void tickEquipmentCheck() {
+    private void tickEquipmentCheck(SharedEquipmentCaptureCache equipmentCaptureCache, boolean includeCleanPlayers) {
         for (UUID uuid : tracker.getTrackedPlayers()) {
+            if (!includeCleanPlayers && !equipmentDirtyPlayers.contains(uuid)) continue;
+
             Player p = Bukkit.getPlayer(uuid);
             if (p == null || !p.isOnline()) continue;
 
-            CapturedEquipmentState currentEquipment = inventoryCaptureService.captureEquipment(p);
+            CapturedEquipmentState currentEquipment = equipmentCaptureCache.captureEquipment(p, inventoryCaptureService);
             CapturedEquipmentState previousEquipment = lastEquipmentState.get(uuid);
+            equipmentDirtyPlayers.remove(uuid);
             if (!inventoryCaptureService.hasEquipmentChanged(currentEquipment, previousEquipment)) {
                 continue;
             }
@@ -207,7 +230,13 @@ public class RecordingSession {
             if (p == null || !p.isOnline()) continue;
             if (!includeCleanPlayers && !inventoryDirtyPlayers.contains(uuid)) continue;
 
-            CapturedInventoryStorageSnapshot currentStorage = inventoryCaptureService.captureStorage(p);
+            boolean forceFreshCapture = includeCleanPlayers && !inventoryDirtyPlayers.contains(uuid);
+            CapturedInventoryStorageSnapshot currentStorage = sharedStorageCaptureCache.captureStorage(
+                    p,
+                    tick,
+                    INVENTORY_CHECK_INTERVAL,
+                    forceFreshCapture,
+                    inventoryCaptureService);
             CapturedInventoryStorageSnapshot previousStorage = lastInventoryStorageSnapshot.get(uuid);
             if (inventoryCaptureService.hasStorageChanged(currentStorage, previousStorage)) {
                 lastInventoryStorageSnapshot.put(uuid, currentStorage);
@@ -311,6 +340,13 @@ public class RecordingSession {
     private void markInventoryDirty(UUID uuid) {
         if (tracker.isTrackedPlayer(uuid)) {
             inventoryDirtyPlayers.add(uuid);
+            sharedStorageCaptureCache.invalidate(uuid);
+        }
+    }
+
+    private void markEquipmentDirty(UUID uuid) {
+        if (tracker.isTrackedPlayer(uuid)) {
+            equipmentDirtyPlayers.add(uuid);
         }
     }
 

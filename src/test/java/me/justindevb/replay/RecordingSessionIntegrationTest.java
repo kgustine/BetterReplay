@@ -319,4 +319,83 @@ class RecordingSessionIntegrationTest {
             assertTrue(invCount >= 1, "Expected at least 1 inventory update in 10 ticks, got " + invCount);
         }
     }
+
+    @Test
+    void equipmentCheck_skipsCleanPlayersUntilFallbackSweep() {
+        try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class);
+             MockedStatic<Replay> replayStatic = mockStatic(Replay.class)) {
+
+            replayStatic.when(Replay::getInstance).thenReturn(plugin);
+            bukkit.when(() -> Bukkit.getPlayer(playerUuid)).thenReturn(player);
+
+            ItemStack mainHand = mock(ItemStack.class);
+            when(mainHand.isEmpty()).thenReturn(false);
+            when(mainHand.serializeAsBytes()).thenReturn(new byte[]{1});
+
+            when(player.isOnline()).thenReturn(true);
+            when(player.getLocation()).thenReturn(new Location(world, 0, 64, 0, 0, 0));
+            when(player.getPose()).thenReturn(Pose.STANDING);
+            when(player.getName()).thenReturn("TestPlayer");
+            when(world.getName()).thenReturn("world");
+            when(player.getWorld()).thenReturn(world);
+            when(player.getInventory()).thenReturn(playerInventory);
+            when(playerInventory.getStorageContents()).thenReturn(new ItemStack[36]);
+            when(playerInventory.getItemInMainHand()).thenReturn(mainHand);
+            when(playerInventory.getItemInOffHand()).thenReturn(null);
+            when(playerInventory.getHeldItemSlot()).thenReturn(0);
+
+            RecordingSession s = createSession(-1);
+
+            s.tick();
+            clearInvocations(mainHand);
+
+            for (int i = 0; i < 19; i++) {
+                s.tick();
+            }
+
+            verify(mainHand, never()).serializeAsBytes();
+
+            s.tick();
+
+            verify(mainHand, times(1)).serializeAsBytes();
+        }
+    }
+
+    @Test
+    void cleanInventorySweep_bypassesSharedStorageCache() {
+        try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class);
+             MockedStatic<Replay> replayStatic = mockStatic(Replay.class)) {
+
+            replayStatic.when(Replay::getInstance).thenReturn(plugin);
+            bukkit.when(() -> Bukkit.getPlayer(playerUuid)).thenReturn(player);
+
+            ItemStack storageItem = mock(ItemStack.class);
+            when(storageItem.isEmpty()).thenReturn(false);
+            when(storageItem.serializeAsBytes()).thenReturn(new byte[]{2});
+
+            ItemStack[] storageContents = new ItemStack[36];
+            storageContents[0] = storageItem;
+
+            when(player.isOnline()).thenReturn(true);
+            when(player.getLocation()).thenReturn(new Location(world, 0, 64, 0, 0, 0));
+            when(player.getPose()).thenReturn(Pose.STANDING);
+            when(player.getName()).thenReturn("TestPlayer");
+            when(world.getName()).thenReturn("world");
+            when(player.getWorld()).thenReturn(world);
+            when(player.getInventory()).thenReturn(playerInventory);
+            when(playerInventory.getStorageContents()).thenReturn(storageContents);
+            when(playerInventory.getItemInMainHand()).thenReturn(null);
+            when(playerInventory.getItemInOffHand()).thenReturn(null);
+            when(playerInventory.getHeldItemSlot()).thenReturn(0);
+
+            RecordingSession s = createSession(-1);
+            clearInvocations(storageItem);
+
+            for (int i = 0; i < 20; i++) {
+                s.tick();
+            }
+
+            verify(storageItem, times(1)).serializeAsBytes();
+        }
+    }
 }

@@ -21,6 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `activeSessions` in `RecorderManager` changed to `ConcurrentHashMap` to prevent `ConcurrentModificationException` (#33)
 - PacketEvents block-break recording is now rescheduled onto the server thread to avoid Netty-thread contention and unsafe shared-state mutation (#43)
 - Held-item swaps and hotbar slot changes are now captured immediately for more accurate replay inventory playback
+- Equipment polling now reuses a single per-tick capture across concurrent recordings and only falls back to clean-player sweeps periodically, reducing repeated ItemStack serialization under high recording load
+- Dirty inventory polls now reuse a shared short-lived storage snapshot cache across concurrent recordings, while clean fallback sweeps still force a fresh capture to preserve missed-change detection
 - Nested replay inventory loss when starting a replay during an active replay (#31)
 - Replay controls getting stuck after replay ends (#27)
 - Replay export now writes under the plugin data folder

@@ -35,6 +35,7 @@ public class RecordingEventHandler implements Listener {
     private final TimelineBuilder builder;
     private final TickProvider tickProvider;
     private final Consumer<UUID> storageDirtyMarker;
+    private final Consumer<UUID> equipmentDirtyMarker;
 
     @FunctionalInterface
     public interface TickProvider {
@@ -45,12 +46,14 @@ public class RecordingEventHandler implements Listener {
             EntityTracker tracker,
             TimelineBuilder builder,
             TickProvider tickProvider,
-            Consumer<UUID> storageDirtyMarker
+            Consumer<UUID> storageDirtyMarker,
+            Consumer<UUID> equipmentDirtyMarker
     ) {
         this.tracker = tracker;
         this.builder = builder;
         this.tickProvider = tickProvider;
         this.storageDirtyMarker = storageDirtyMarker;
+        this.equipmentDirtyMarker = equipmentDirtyMarker;
     }
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
@@ -58,6 +61,7 @@ public class RecordingEventHandler implements Listener {
         if (!tracker.isTrackedPlayer(e.getPlayer().getUniqueId())) return;
 
         markStorageDirty(e.getPlayer().getUniqueId());
+        markEquipmentDirty(e.getPlayer().getUniqueId());
 
         builder.addEvent(new TimelineEvent.BlockBreak(
                 tickProvider.getTick(),
@@ -86,6 +90,7 @@ public class RecordingEventHandler implements Listener {
         if (!tracker.isTrackedPlayer(p.getUniqueId())) return;
 
         markStorageDirty(p.getUniqueId());
+        markEquipmentDirty(p.getUniqueId());
 
         ItemStack dropped = e.getItemDrop().getItemStack();
         Location loc = p.getLocation();
@@ -105,6 +110,7 @@ public class RecordingEventHandler implements Listener {
         if (!tracker.isTrackedPlayer(e.getPlayer().getUniqueId())) return;
 
         markStorageDirty(e.getPlayer().getUniqueId());
+        markEquipmentDirty(e.getPlayer().getUniqueId());
 
         builder.addEvent(new TimelineEvent.BlockPlace(
                 tickProvider.getTick(),
@@ -122,6 +128,7 @@ public class RecordingEventHandler implements Listener {
         if (!tracker.isTrackedPlayer(p.getUniqueId())) return;
 
         markStorageDirty(p.getUniqueId());
+        markEquipmentDirty(p.getUniqueId());
 
         Entity entity = e.getEntity();
 
@@ -189,18 +196,22 @@ public class RecordingEventHandler implements Listener {
         if (!tracker.isTrackedPlayer(p.getUniqueId())) return;
 
         markStorageDirty(p.getUniqueId());
+        markEquipmentDirty(p.getUniqueId());
     }
 
     @EventHandler(priority = EventPriority.MONITOR)
     public void onItemHeld(PlayerItemHeldEvent e) {
         Player p = e.getPlayer();
         if (!tracker.isTrackedPlayer(p.getUniqueId())) return;
+
+        markEquipmentDirty(p.getUniqueId());
     }
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onItemConsume(PlayerItemConsumeEvent e) {
         if (!tracker.isTrackedPlayer(e.getPlayer().getUniqueId())) return;
         markStorageDirty(e.getPlayer().getUniqueId());
+        markEquipmentDirty(e.getPlayer().getUniqueId());
     }
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
@@ -208,6 +219,7 @@ public class RecordingEventHandler implements Listener {
         if (!(e.getWhoClicked() instanceof Player player)) return;
         if (!tracker.isTrackedPlayer(player.getUniqueId())) return;
         markStorageDirty(player.getUniqueId());
+        markEquipmentDirty(player.getUniqueId());
     }
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
@@ -215,6 +227,7 @@ public class RecordingEventHandler implements Listener {
         if (!(e.getWhoClicked() instanceof Player player)) return;
         if (!tracker.isTrackedPlayer(player.getUniqueId())) return;
         markStorageDirty(player.getUniqueId());
+        markEquipmentDirty(player.getUniqueId());
     }
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
@@ -222,12 +235,14 @@ public class RecordingEventHandler implements Listener {
         if (!(e.getEntity() instanceof Player player)) return;
         if (!tracker.isTrackedPlayer(player.getUniqueId())) return;
         markStorageDirty(player.getUniqueId());
+        markEquipmentDirty(player.getUniqueId());
     }
 
     @EventHandler(priority = EventPriority.MONITOR)
     public void onItemBreak(PlayerItemBreakEvent e) {
         if (!tracker.isTrackedPlayer(e.getPlayer().getUniqueId())) return;
         markStorageDirty(e.getPlayer().getUniqueId());
+        markEquipmentDirty(e.getPlayer().getUniqueId());
     }
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
@@ -292,6 +307,9 @@ public class RecordingEventHandler implements Listener {
 
         if (!tracker.isTrackedPlayer(uuid)) return;
 
+        markStorageDirty(uuid);
+        markEquipmentDirty(uuid);
+
         builder.addEvent(new TimelineEvent.EntityDeath(
                 tickProvider.getTick(),
                 uuid.toString(),
@@ -318,5 +336,9 @@ public class RecordingEventHandler implements Listener {
 
     private void markStorageDirty(UUID uuid) {
         storageDirtyMarker.accept(uuid);
+    }
+
+    private void markEquipmentDirty(UUID uuid) {
+        equipmentDirtyMarker.accept(uuid);
     }
 }
