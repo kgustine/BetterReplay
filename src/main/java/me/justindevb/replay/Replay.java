@@ -14,6 +14,7 @@ import me.justindevb.replay.benchmark.ReplayBenchmarkHarness;
 import me.justindevb.replay.benchmark.ReplayBenchmarkReportWriter;
 import me.justindevb.replay.benchmark.ReplayBenchmarkService;
 import me.justindevb.replay.config.ReplayConfigManager;
+import me.justindevb.replay.config.ReplayConfigReloadResult;
 import me.justindevb.replay.config.ReplayConfigSetting;
 import me.justindevb.replay.debug.ReplayDebugCommand;
 import me.justindevb.replay.export.ReplayExportCommand;
@@ -32,7 +33,11 @@ import org.bukkit.configuration.file.FileConfiguration;
 import org.bukkit.plugin.java.JavaPlugin;
 
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.EnumMap;
+import java.util.List;
 import java.util.Locale;
+import java.util.Objects;
 import java.util.concurrent.Executor;
 import java.util.logging.Level;
 
@@ -179,6 +184,44 @@ public class Replay extends JavaPlugin {
         RetentionPolicy policy = RetentionPolicy.fromConfig(getConfig(), getLogger());
         replayRetentionService = new ReplayRetentionService(getReplayStorage(), foliaLib, getLogger(), policy, replayCache);
         replayRetentionService.start();
+    }
+
+    public ReplayConfigReloadResult reloadRuntimeConfig() {
+        FileConfiguration previousConfig = getConfig();
+        EnumMap<ReplayConfigSetting, Object> previousValues = snapshotConfigValues(previousConfig);
+
+        new ReplayConfigManager(this).initialize();
+
+        EnumMap<ReplayConfigSetting, Object> currentValues = snapshotConfigValues(getConfig());
+        List<ReplayConfigSetting> changedSettings = new ArrayList<>();
+        for (ReplayConfigSetting setting : ReplayConfigSetting.values()) {
+            if (!Objects.equals(previousValues.get(setting), currentValues.get(setting))) {
+                changedSettings.add(setting);
+            }
+        }
+
+        boolean retentionServiceRestarted = false;
+        if (storage != null && foliaLib != null) {
+            if (replayRetentionService != null) {
+                replayRetentionService.stop();
+            }
+            initRetention();
+            retentionServiceRestarted = true;
+        }
+
+        return ReplayConfigReloadResult.fromChangedSettings(changedSettings, retentionServiceRestarted);
+    }
+
+    private EnumMap<ReplayConfigSetting, Object> snapshotConfigValues(FileConfiguration config) {
+        EnumMap<ReplayConfigSetting, Object> values = new EnumMap<>(ReplayConfigSetting.class);
+        if (config == null) {
+            return values;
+        }
+
+        for (ReplayConfigSetting setting : ReplayConfigSetting.values()) {
+            values.put(setting, setting.readValue(config));
+        }
+        return values;
     }
 
     public ReplayCache getReplayCache() {

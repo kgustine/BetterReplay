@@ -24,6 +24,7 @@ permissions:
       replay.export: true
       replay.benchmark: true
       replay.debug: true
+      replay.reload: true
   replay.start:
     description: Allows starting a new recording
     default: op
@@ -53,4 +54,7 @@ permissions:
     default: op
   replay.debug:
     description: Allows running the hidden replay debug dump command
+    default: op
+  replay.reload:
+    description: Allows reloading BetterReplay config at runtime
     default: op
