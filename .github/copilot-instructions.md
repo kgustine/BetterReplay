@@ -71,7 +71,7 @@ Follow them every time code, documentation, or configuration is added or changed
 - Thread safety: collections shared across threads **must** use concurrent variants (`ConcurrentHashMap`, etc.).
 - Events that must run on the main thread must be fired synchronously — never `callEvent` from an async context without scheduling onto the main thread first.
 - All cross-thread access to Bukkit API must be dispatched back to the server thread via `FoliaLib` scheduler.
-
+- Any new or changed config option must be added through ReplayConfigSetting with an explicit ReplayConfigReloadScope. Do not introduce ad hoc config key reads outside the typed config surface. If config behavior changes, update README, CHANGELOG, and tests to cover whether the setting applies immediately, only to new sessions, or requires restart.
 ---
 
 ## API contract

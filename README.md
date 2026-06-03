@@ -118,6 +118,7 @@ Subcommands:
 - benchmark (hidden admin diagnostic command)
 - debug dump (hidden admin dump command)
 - debug info (hidden admin metadata command)
+- reload config without a full server restart for supported settings
 
 Permissions:
 - replay.start
@@ -130,7 +131,11 @@ Permissions:
 - replay.export
 - replay.benchmark
 - replay.debug
+- replay.reload
 - replay.*
+
+Reload usage:
+- `/replay reload` reloads `config.yml`, restarts the retention service, applies live-read settings immediately, and reports which changed settings only affect new sessions or still require a restart.
 
 Hidden export usage:
 - `/replay export <name> [player=<name|all>] [start=<tick>] [end=<tick>]` exports a replay to a `.br` file under the plugin `exports/` folder and prints the generated path.
@@ -258,6 +263,7 @@ Notes:
 - `Playback.Chunk-Send-Limit-Per-Tick` and `Playback.Chunk-Clear-Limit-Per-Tick` control how aggressively packet-friendly chunk playback fills and clears the replay viewer's chunk window. Both default to `1`; dedicated replay servers can raise them to support larger view radii with less concern about live server impact. Replay-load probing runs at `10x` the configured send limit so uncaptured chunks can be ruled out quickly without waiting on the actual packet send rate.
 - If `Playback.Chunk-View-Radius` is larger than `Recording.Chunk-Capture.Radius`, only chunks that were actually captured during recording can be replayed; uncaptured chunks stay on the live world view.
 - `Playback.Chunk-Timing-Diagnostics` logs per-stage replay chunk timing information at runtime so you can inspect async preparation, replay load application, and queued live restore costs while profiling MSPT spikes.
+- `/replay reload` applies `List.*` and viewer restore/safety settings immediately, restarts retention scheduling for `Retention.*`, applies session-scoped playback/recording settings only to newly started recordings or replays, and does not hot-swap `General.Storage-Type` or `General.MySQL.*`.
 - Protected replays are skipped by both retention cleanup and manual delete commands until they are explicitly unprotected.
 - Protection stores required audit metadata: `protectedAt` and `protectedBy`.
 - Protected replays are highlighted in `/replay list` using `List.Protected-Highlight-Color`; the default is gold (`&6`).

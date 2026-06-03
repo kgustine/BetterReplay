@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `/replay reload` command to re-read `config.yml`, restart retention scheduling, and report which changed settings apply immediately, only to new sessions, or still require a server restart
 - Frame-by-frame step controls during paused replay; step backward or forward one tick at a time via `⏮`/`⏭` inventory buttons (slots 6–7)
 - Variable playback speed controls during active replay; adjust with `⏪ Slower`/`⏩ Faster` inventory buttons (slots 6–7) using configurable step increments
 - Current playback speed displayed in the action bar as `[X.Xx]` during playback

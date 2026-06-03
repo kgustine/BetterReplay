@@ -2,6 +2,7 @@ package me.justindevb.replay;
 
 import me.justindevb.replay.api.ReplayManager;
 import me.justindevb.replay.benchmark.ReplayBenchmarkCommand;
+import me.justindevb.replay.config.ReplayConfigReloadResult;
 import me.justindevb.replay.config.ReplayConfigSetting;
 import me.justindevb.replay.debug.ReplayDebugCommand;
 import me.justindevb.replay.export.ReplayExportCommand;
@@ -23,6 +24,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.stream.Collectors;
 import java.util.logging.Level;
 
 public class ReplayCommand implements CommandExecutor, TabCompleter {
@@ -70,6 +72,7 @@ public class ReplayCommand implements CommandExecutor, TabCompleter {
             return switch (subcommand) {
                 case "protect" -> handleProtect(sender, args, "console");
                 case "unprotect" -> handleUnprotect(sender, args);
+                case "reload" -> handleReload(sender);
                 default -> {
                     sender.sendMessage("Must be a player to execute this command");
                     yield true;
@@ -267,6 +270,9 @@ public class ReplayCommand implements CommandExecutor, TabCompleter {
             case "unprotect" -> {
                 return handleUnprotect(sender, args);
             }
+            case "reload" -> {
+                return handleReload(sender);
+            }
             default -> {
                 p.sendMessage("§cUnknown subcommand: §f" + args[0]);
                 sendHelp(p);
@@ -296,6 +302,8 @@ public class ReplayCommand implements CommandExecutor, TabCompleter {
             p.sendMessage("§e/replay protect <name> §7- Protect a replay from deletion");
         if (p.hasPermission("replay.unprotect"))
             p.sendMessage("§e/replay unprotect <name> §7- Remove replay deletion protection");
+        if (p.hasPermission("replay.reload"))
+            p.sendMessage("§e/replay reload §7- Reload config and restart retention tasks");
     }
 
     @Override
@@ -323,6 +331,7 @@ public class ReplayCommand implements CommandExecutor, TabCompleter {
             if (sender.hasPermission("replay.list")) completions.add("list");
             if (sender.hasPermission("replay.protect")) completions.add("protect");
             if (sender.hasPermission("replay.unprotect")) completions.add("unprotect");
+                if (sender.hasPermission("replay.reload")) completions.add("reload");
 
             return completions.stream()
                     .filter(s -> s.startsWith(args[0].toLowerCase()))
@@ -417,6 +426,48 @@ public class ReplayCommand implements CommandExecutor, TabCompleter {
             return "";
         }
         return String.join(" ", Arrays.copyOfRange(args, fromIndex, args.length)).trim();
+    }
+
+    private boolean handleReload(CommandSender sender) {
+        if (!sender.hasPermission("replay.reload")) {
+            sender.sendMessage("You do not have permission");
+            return true;
+        }
+
+        Replay plugin = Replay.getInstance();
+        ReplayConfigReloadResult result = plugin.reloadRuntimeConfig();
+
+        sender.sendMessage("§aReloaded BetterReplay config.");
+        if (result.retentionServiceRestarted()) {
+            if (result.retentionRestartChanges().isEmpty()) {
+                sender.sendMessage("§7Retention service restarted.");
+            } else {
+                sender.sendMessage("§7Retention service restarted for: " + formatSettings(result.retentionRestartChanges()));
+            }
+        }
+        if (!result.immediateChanges().isEmpty()) {
+            sender.sendMessage("§7Applied immediately: " + formatSettings(result.immediateChanges()));
+        }
+        if (!result.newSessionChanges().isEmpty()) {
+            sender.sendMessage("§7Affects new recordings/replays only: " + formatSettings(result.newSessionChanges()));
+        }
+        if (!result.futureChanges().isEmpty()) {
+            sender.sendMessage("§7Applies to future startup/manual checks: " + formatSettings(result.futureChanges()));
+        }
+        if (!result.restartRequiredChanges().isEmpty()) {
+            sender.sendMessage("§7Still requires restart: " + formatSettings(result.restartRequiredChanges()));
+        }
+        if (!result.hasVisibleChanges()) {
+            sender.sendMessage("§7No runtime-facing config value changes were detected.");
+        }
+
+        return true;
+    }
+
+    private String formatSettings(List<ReplayConfigSetting> settings) {
+        return settings.stream()
+                .map(ReplayConfigSetting::getKey)
+                .collect(Collectors.joining(", "));
     }
 
     private String formatReplayListName(ReplaySummary replay, String protectedHighlightColor) {

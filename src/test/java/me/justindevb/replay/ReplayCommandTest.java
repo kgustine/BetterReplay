@@ -2,6 +2,8 @@ package me.justindevb.replay;
 
 import me.justindevb.replay.api.ReplayManager;
 import me.justindevb.replay.benchmark.ReplayBenchmarkCommand;
+import me.justindevb.replay.config.ReplayConfigReloadResult;
+import me.justindevb.replay.config.ReplayConfigSetting;
 import me.justindevb.replay.debug.ReplayDebugCommand;
 import me.justindevb.replay.export.ReplayExportCommand;
 import me.justindevb.replay.storage.ReplayDeleteResult;
@@ -124,6 +126,27 @@ class ReplayCommandTest {
             assertTrue(result);
             verify(replayManager).unprotectSavedReplay("demo");
             verify(consoleSender).sendMessage("§aUnprotected replay: demo");
+        }
+    }
+
+    @Test
+    void reloadSubcommand_canRunFromConsole() {
+        org.bukkit.command.CommandSender consoleSender = mock(org.bukkit.command.CommandSender.class);
+        when(consoleSender.hasPermission("replay.reload")).thenReturn(true);
+
+        try (MockedStatic<Replay> replay = mockStatic(Replay.class)) {
+            Replay plugin = mock(Replay.class);
+            when(plugin.reloadRuntimeConfig()).thenReturn(ReplayConfigReloadResult.fromChangedSettings(
+                    List.of(ReplayConfigSetting.RETENTION_MAX_AGE, ReplayConfigSetting.LIST_PAGE_SIZE), true));
+            replay.when(Replay::getInstance).thenReturn(plugin);
+
+            boolean result = replayCommand.onCommand(consoleSender, command, "replay", new String[]{"reload"});
+
+            assertTrue(result);
+            verify(plugin).reloadRuntimeConfig();
+            verify(consoleSender).sendMessage("§aReloaded BetterReplay config.");
+            verify(consoleSender).sendMessage("§7Retention service restarted for: Retention.Max-Age");
+            verify(consoleSender).sendMessage("§7Applied immediately: List.Page-Size");
         }
     }
 
@@ -252,6 +275,60 @@ class ReplayCommandTest {
 
             replayCommand.onCommand(player, command, "replay", new String[]{"stop", "nope"});
             verify(player).sendMessage("§cNo active session with that name!");
+        }
+    }
+
+    @Nested
+    class Reload {
+        @Test
+        void noPermission_rejected() {
+            when(player.hasPermission("replay.reload")).thenReturn(false);
+
+            replayCommand.onCommand(player, command, "replay", new String[]{"reload"});
+
+            verify(player).sendMessage("You do not have permission");
+        }
+
+        @Test
+        void reportsImmediateNewSessionFutureAndRestartRequiredChanges() {
+            when(player.hasPermission("replay.reload")).thenReturn(true);
+
+            try (MockedStatic<Replay> replay = mockStatic(Replay.class)) {
+                Replay plugin = mock(Replay.class);
+                when(plugin.reloadRuntimeConfig()).thenReturn(ReplayConfigReloadResult.fromChangedSettings(
+                        List.of(
+                                ReplayConfigSetting.PLAYBACK_RESTORE_VIEWER_STATE_ON_REJOIN,
+                                ReplayConfigSetting.PLAYBACK_SPEED_STEP,
+                                ReplayConfigSetting.CHECK_UPDATE,
+                                ReplayConfigSetting.STORAGE_TYPE),
+                        true));
+                replay.when(Replay::getInstance).thenReturn(plugin);
+
+                replayCommand.onCommand(player, command, "replay", new String[]{"reload"});
+
+                verify(player).sendMessage("§aReloaded BetterReplay config.");
+                verify(player).sendMessage("§7Retention service restarted.");
+                verify(player).sendMessage("§7Applied immediately: Playback.Restore-Viewer-State-On-Rejoin");
+                verify(player).sendMessage("§7Affects new recordings/replays only: Playback.Speed-Step");
+                verify(player).sendMessage("§7Applies to future startup/manual checks: General.Check-Update");
+                verify(player).sendMessage("§7Still requires restart: General.Storage-Type");
+            }
+        }
+
+        @Test
+        void noVisibleChanges_reportsThatExplicitly() {
+            when(player.hasPermission("replay.reload")).thenReturn(true);
+
+            try (MockedStatic<Replay> replay = mockStatic(Replay.class)) {
+                Replay plugin = mock(Replay.class);
+                when(plugin.reloadRuntimeConfig()).thenReturn(ReplayConfigReloadResult.fromChangedSettings(List.of(), true));
+                replay.when(Replay::getInstance).thenReturn(plugin);
+
+                replayCommand.onCommand(player, command, "replay", new String[]{"reload"});
+
+                verify(player).sendMessage("§7Retention service restarted.");
+                verify(player).sendMessage("§7No runtime-facing config value changes were detected.");
+            }
         }
     }
 
@@ -401,10 +478,12 @@ class ReplayCommandTest {
             when(player.hasPermission("replay.list")).thenReturn(false);
             when(player.hasPermission("replay.protect")).thenReturn(false);
             when(player.hasPermission("replay.unprotect")).thenReturn(false);
+            when(player.hasPermission("replay.reload")).thenReturn(true);
 
             List<String> completions = replayCommand.onTabComplete(player, command, "replay", new String[]{""});
             assertTrue(completions.contains("start"));
             assertTrue(completions.contains("stop"));
+            assertTrue(completions.contains("reload"));
             assertFalse(completions.contains("play"));
             assertFalse(completions.contains("export"));
             assertFalse(completions.contains("benchmark"));
@@ -447,6 +526,7 @@ class ReplayCommandTest {
             when(player.hasPermission("replay.list")).thenReturn(true);
             when(player.hasPermission("replay.protect")).thenReturn(true);
             when(player.hasPermission("replay.unprotect")).thenReturn(true);
+            when(player.hasPermission("replay.reload")).thenReturn(true);
 
             List<String> completions = replayCommand.onTabComplete(player, command, "replay", new String[]{"st"});
             assertTrue(completions.contains("start"));
@@ -532,6 +612,22 @@ class ReplayCommandTest {
                 verify(player).sendMessage("§aUnprotected replay: demo");
             }
         }
+    }
+
+    @Test
+    void help_includesReloadWhenPermitted() {
+        when(player.hasPermission("replay.start")).thenReturn(false);
+        when(player.hasPermission("replay.stop")).thenReturn(false);
+        when(player.hasPermission("replay.play")).thenReturn(false);
+        when(player.hasPermission("replay.list")).thenReturn(false);
+        when(player.hasPermission("replay.delete")).thenReturn(false);
+        when(player.hasPermission("replay.protect")).thenReturn(false);
+        when(player.hasPermission("replay.unprotect")).thenReturn(false);
+        when(player.hasPermission("replay.reload")).thenReturn(true);
+
+        replayCommand.onCommand(player, command, "replay", new String[]{});
+
+        verify(player).sendMessage("§e/replay reload §7- Reload config and restart retention tasks");
     }
 
     private Replay immediateReplayPlugin() {
