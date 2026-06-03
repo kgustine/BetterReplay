@@ -67,7 +67,7 @@ public class ReplayViewerStateManager implements Listener {
             Location returnLocation = state.returnLocation();
             if (returnLocation != null && returnLocation.getWorld() != null) {
                 viewer.setFallDistance(0.0F);
-                viewer.teleport(returnLocation.clone());
+                replay.getFoliaLib().getScheduler().teleportAsync(viewer, returnLocation.clone());
             }
         }
 

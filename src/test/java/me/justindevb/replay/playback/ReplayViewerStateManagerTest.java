@@ -1,5 +1,7 @@
 package me.justindevb.replay.playback;
 
+import com.tcoded.folialib.FoliaLib;
+import com.tcoded.folialib.impl.PlatformScheduler;
 import me.justindevb.replay.Replay;
 import org.bukkit.Bukkit;
 import org.bukkit.GameMode;
@@ -35,6 +37,8 @@ class ReplayViewerStateManagerTest {
     @Mock private Player otherPlayer;
     @Mock private Player lateJoiner;
     @Mock private PlayerJoinEvent joinEvent;
+    @Mock private FoliaLib foliaLib;
+    @Mock private PlatformScheduler scheduler;
     @Mock private Location currentLocation;
     @Mock private Location currentLocationClone;
     @Mock private Location returnLocation;
@@ -118,6 +122,8 @@ class ReplayViewerStateManagerTest {
     @Test
     void restoreViewerState_restoresLocationModeAndFlight() {
         when(replay.getConfig()).thenReturn(config);
+        when(replay.getFoliaLib()).thenReturn(foliaLib);
+        when(foliaLib.getScheduler()).thenReturn(scheduler);
         when(config.getBoolean("Playback.Restore-Viewer-Location-On-Stop", true)).thenReturn(true);
         when(config.getBoolean("Playback.Restore-Viewer-GameMode-On-Stop", true)).thenReturn(true);
         when(config.getBoolean("Playback.Restore-Viewer-Flight-On-Stop", true)).thenReturn(true);
@@ -128,7 +134,7 @@ class ReplayViewerStateManagerTest {
 
         manager.restoreViewerState(viewer, state);
 
-        verify(viewer).teleport(returnLocationClone);
+        verify(scheduler).teleportAsync(viewer, returnLocationClone);
         verify(viewer).setGameMode(GameMode.SURVIVAL);
         verify(viewer).setAllowFlight(false);
         verify(viewer).setFlying(false);
@@ -163,6 +169,8 @@ class ReplayViewerStateManagerTest {
     void onPlayerJoin_restoresQueuedViewerStateOnce() {
         UUID viewerId = UUID.randomUUID();
         when(replay.getConfig()).thenReturn(config);
+        when(replay.getFoliaLib()).thenReturn(foliaLib);
+        when(foliaLib.getScheduler()).thenReturn(scheduler);
         when(config.getBoolean("Playback.Restore-Viewer-State-On-Rejoin", true)).thenReturn(true);
         when(config.getBoolean("Playback.Restore-Viewer-Location-On-Stop", true)).thenReturn(true);
         when(config.getBoolean("Playback.Restore-Viewer-GameMode-On-Stop", true)).thenReturn(true);
@@ -176,12 +184,12 @@ class ReplayViewerStateManagerTest {
 
         manager.onPlayerJoin(joinEvent);
 
-        verify(viewer).teleport(returnLocationClone);
+        verify(scheduler).teleportAsync(viewer, returnLocationClone);
         verify(viewer).setGameMode(GameMode.SURVIVAL);
 
         manager.onPlayerJoin(joinEvent);
 
-        verify(viewer).teleport(returnLocationClone);
+        verify(scheduler).teleportAsync(viewer, returnLocationClone);
     }
 
     @Test
