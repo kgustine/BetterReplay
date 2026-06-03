@@ -2,6 +2,7 @@ package me.justindevb.replay.playback;
 
 import me.justindevb.replay.Replay;
 import me.justindevb.replay.config.ReplayConfigSetting;
+import org.bukkit.Bukkit;
 import org.bukkit.GameMode;
 import org.bukkit.Location;
 import org.bukkit.entity.Player;
@@ -10,6 +11,7 @@ import org.bukkit.event.Listener;
 import org.bukkit.event.player.PlayerJoinEvent;
 
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -17,6 +19,7 @@ public class ReplayViewerStateManager implements Listener {
 
     private final Replay replay;
     private final Map<UUID, ReplayViewerState> pendingRestores = new ConcurrentHashMap<>();
+    private final Set<UUID> activeVanishedViewers = ConcurrentHashMap.newKeySet();
 
     public ReplayViewerStateManager(Replay replay) {
         this.replay = replay;
@@ -30,15 +33,29 @@ public class ReplayViewerStateManager implements Listener {
                 viewer.isFlying());
     }
 
-    public void applyReplaySafety(Player viewer) {
+    public ReplayViewerState applyReplaySafety(Player viewer, ReplayViewerState state) {
+        if (viewer == null) {
+            return state;
+        }
+
+        ReplayViewerState updatedState = state;
+
+        if (ReplayConfigSetting.PLAYBACK_VANISH_VIEWER.getBoolean(replay.getConfig())) {
+            vanishViewer(viewer);
+            if (updatedState != null) {
+                updatedState = updatedState.withReplayVanishApplied(true);
+            }
+        }
+
         if (resolveSafetyMode() == ReplayViewerSafetyMode.OFF) {
-            return;
+            return updatedState;
         }
 
         viewer.setGameMode(GameMode.CREATIVE);
         viewer.setAllowFlight(true);
         viewer.setFlying(false);
         viewer.setFallDistance(0.0F);
+        return updatedState;
     }
 
     public void restoreViewerState(Player viewer, ReplayViewerState state) {
@@ -63,6 +80,9 @@ public class ReplayViewerStateManager implements Listener {
             viewer.setFlying(state.flying());
         }
 
+        if (state.replayVanishApplied()) {
+            restoreViewerVisibility(viewer);
+        }
         viewer.setFallDistance(0.0F);
     }
 
@@ -70,6 +90,7 @@ public class ReplayViewerStateManager implements Listener {
         if (viewerId == null || state == null) {
             return;
         }
+        activeVanishedViewers.remove(viewerId);
         pendingRestores.put(viewerId, state);
     }
 
@@ -83,6 +104,8 @@ public class ReplayViewerStateManager implements Listener {
     @EventHandler
     public void onPlayerJoin(PlayerJoinEvent event) {
         Player player = event.getPlayer();
+        hideActiveReplayViewersFrom(player);
+
         ReplayViewerState state = pendingRestores.remove(player.getUniqueId());
         if (state == null) {
             return;
@@ -98,5 +121,39 @@ public class ReplayViewerStateManager implements Listener {
     private ReplayViewerSafetyMode resolveSafetyMode() {
         return ReplayViewerSafetyMode.fromConfiguredValue(
                 ReplayConfigSetting.PLAYBACK_VIEWER_SAFETY_MODE.getString(replay.getConfig()));
+    }
+
+    private void vanishViewer(Player viewer) {
+        activeVanishedViewers.add(viewer.getUniqueId());
+        for (Player onlinePlayer : Bukkit.getOnlinePlayers()) {
+            if (onlinePlayer.equals(viewer)) {
+                continue;
+            }
+            onlinePlayer.hidePlayer(replay, viewer);
+        }
+    }
+
+    private void restoreViewerVisibility(Player viewer) {
+        activeVanishedViewers.remove(viewer.getUniqueId());
+
+        for (Player onlinePlayer : Bukkit.getOnlinePlayers()) {
+            if (onlinePlayer.equals(viewer)) {
+                continue;
+            }
+            onlinePlayer.showPlayer(replay, viewer);
+        }
+    }
+
+    private void hideActiveReplayViewersFrom(Player player) {
+        for (UUID viewerId : activeVanishedViewers) {
+            if (viewerId.equals(player.getUniqueId())) {
+                continue;
+            }
+
+            Player vanishedViewer = Bukkit.getPlayer(viewerId);
+            if (vanishedViewer != null && vanishedViewer.isOnline()) {
+                player.hidePlayer(replay, vanishedViewer);
+            }
+        }
     }
 }

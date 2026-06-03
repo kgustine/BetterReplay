@@ -561,7 +561,7 @@ public class ReplaySession implements Listener, PacketListener {
     }
 
     private void applyReplayViewerSafety() {
-        viewerStateManager.applyReplaySafety(viewer);
+        savedViewerState = viewerStateManager.applyReplaySafety(viewer, savedViewerState);
     }
 
     private void restoreViewerState() {

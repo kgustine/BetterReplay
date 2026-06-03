@@ -3,7 +3,7 @@ package me.justindevb.replay.config;
 import org.bukkit.configuration.file.FileConfiguration;
 
 public enum ReplayConfigSetting {
-        CONFIG_VERSION("Config-Version", 6, ReplayConfigReloadScope.INTERNAL,
+        CONFIG_VERSION("Config-Version", 7, ReplayConfigReloadScope.INTERNAL,
             "Internal config migration version. Do not edit unless instructed."),
     CHECK_UPDATE("General.Check-Update", true, ReplayConfigReloadScope.FUTURE_ONLY,
             "Check for plugin updates on startup."),
@@ -35,6 +35,10 @@ public enum ReplayConfigSetting {
             "Safety mode applied to the real viewer when a replay starts.",
             "Set this to creative to protect moderators from live-world hazards after the replay teleports them.",
             "Set this to off to leave the viewer's current game mode unchanged."),
+    PLAYBACK_VANISH_VIEWER("Playback.Vanish-Viewer", true, ReplayConfigReloadScope.IMMEDIATE,
+            "Hide replay viewers from live players while playback is active.",
+            "Leave this enabled on live servers so staff reviewing a replay do not appear inside protected builds.",
+            "Set this to false on dedicated replay servers if viewer visibility is intentional."),
     PLAYBACK_RESTORE_VIEWER_LOCATION_ON_STOP("Playback.Restore-Viewer-Location-On-Stop", true, ReplayConfigReloadScope.IMMEDIATE,
             "Return the viewer to their original pre-replay location when playback ends.",
             "Leave this enabled unless you intentionally want replay playback to strand viewers at the replay location."),

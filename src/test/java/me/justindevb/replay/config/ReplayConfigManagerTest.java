@@ -52,11 +52,13 @@ class ReplayConfigManagerTest {
         String nl = System.lineSeparator();
         assertTrue(migrated.startsWith("# ==========================================="));
         assertTrue(migrated.contains("# Internal config migration version. Do not edit unless instructed."));
-        assertTrue(migrated.contains("Config-Version: 6"));
+        assertTrue(migrated.contains("Config-Version: 7"));
         assertFalse(migrated.contains("Compress-Replays:"));
         assertTrue(migrated.contains("# Check for plugin updates on startup."));
         assertTrue(migrated.contains("# Safety mode applied to the real viewer when a replay starts."));
         assertTrue(migrated.contains("Viewer-Safety-Mode: creative"));
+        assertTrue(migrated.contains("# Hide replay viewers from live players while playback is active."));
+        assertTrue(migrated.contains("Vanish-Viewer: true"));
         assertTrue(migrated.contains("Restore-Viewer-Location-On-Stop: true"));
         assertTrue(migrated.contains("Restore-Viewer-GameMode-On-Stop: true"));
         assertTrue(migrated.contains("Restore-Viewer-Flight-On-Stop: true"));
@@ -81,8 +83,8 @@ class ReplayConfigManagerTest {
         assertTrue(migrated.contains("# Number of replay names shown per /replay list page."));
         assertTrue(migrated.indexOf("# MySQL host name or IP address.") < migrated.indexOf("host:"));
         assertTrue(migrated.indexOf("# Check for plugin updates on startup.") < migrated.indexOf("Check-Update:"));
-        assertTrue(migrated.indexOf("Config-Version: 6") < migrated.indexOf("General:"));
-        assertTrue(migrated.contains("Config-Version: 6" + nl + nl + "General:"));
+        assertTrue(migrated.indexOf("Config-Version: 7") < migrated.indexOf("General:"));
+        assertTrue(migrated.contains("Config-Version: 7" + nl + nl + "General:"));
         assertTrue(migrated.indexOf("password: password") < migrated.indexOf("# Number of replay names shown per /replay list page."));
 
         verify(plugin).reloadConfig();
@@ -122,9 +124,9 @@ class ReplayConfigManagerTest {
         assertFalse(migrated.contains("list-page-size:"));
         assertFalse(migrated.contains("list-protected-highlight-color:"));
         assertFalse(migrated.contains("list:"));
-        assertTrue(migrated.indexOf("Config-Version: 6") < migrated.indexOf("General:"));
-        assertTrue(migrated.contains("Config-Version: 6" + nl + nl + "General:"));
-        assertFalse(migrated.contains("Config-Version: 6" + nl + nl + nl + "General:"));
+        assertTrue(migrated.indexOf("Config-Version: 7") < migrated.indexOf("General:"));
+        assertTrue(migrated.contains("Config-Version: 7" + nl + nl + "General:"));
+        assertFalse(migrated.contains("Config-Version: 7" + nl + nl + nl + "General:"));
     }
 
     @Test
