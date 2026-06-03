@@ -211,6 +211,7 @@ Playback:
   Speed-Step: 0.2
   Max-Speed: 1.0
   Viewer-Safety-Mode: creative
+  Vanish-Viewer: true
   Restore-Viewer-Location-On-Stop: true
   Restore-Viewer-GameMode-On-Stop: true
   Restore-Viewer-Flight-On-Stop: true
@@ -255,6 +256,7 @@ Notes:
 - `Recording.Chunk-Capture.Max-Unique-Chunks-Per-Recording` bounds capture size; once the cap is reached, recording continues but additional chunk baselines are skipped.
 - `Playback.Chunk-View-Radius` controls the replay viewer's chunk playback radius independently from recording capture radius. Default is `3`.
 - `Playback.Viewer-Safety-Mode` controls how BetterReplay protects the real viewer when a replay starts. Default is `creative`, which switches the viewer into creative before teleporting them into replay space; set it to `off` to preserve the viewer's current mode.
+- `Playback.Vanish-Viewer` hides replay viewers from live players while playback is active. Default is `true`, which prevents staff review teleports from visibly appearing inside live builds.
 - `Playback.Restore-Viewer-Location-On-Stop` returns the viewer to their original live-world location when replay playback ends. Default is `true`.
 - `Playback.Restore-Viewer-GameMode-On-Stop` restores the viewer's original game mode after replay playback ends. Default is `true`.
 - `Playback.Restore-Viewer-Flight-On-Stop` restores the viewer's original `allowFlight` and `flying` flags after replay playback ends. Default is `true`.

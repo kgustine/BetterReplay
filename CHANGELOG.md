@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Replay protection commands and metadata, protected replay highlighting in `/replay list`, and config-driven retention cleanup with duration parsing
 - Optional chunk baseline capture and chunk-aware playback for binary replays, including block-entity support, replay chunk caching, `Playback.Chunk-View-Radius`, `Playback.Chunk-Send-Limit-Per-Tick`, `Playback.Chunk-Clear-Limit-Per-Tick`, `Playback.Chunk-Timing-Diagnostics`, and `Playback.Chunk-Mode`
 - Split inventory recording into dedicated equipment-state and storage-snapshot events backed by raw item bytes, plus regression coverage for the new binary payloads and legacy JSON upgrade path
+- New config key `Playback.Vanish-Viewer` (default `true`) to hide replay viewers from live players during playback
 
 ### Fixed
 - `activeSessions` in `RecorderManager` changed to `ConcurrentHashMap` to prevent `ConcurrentModificationException` (#33)
