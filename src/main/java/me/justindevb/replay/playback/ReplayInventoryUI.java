@@ -10,6 +10,7 @@ import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
+import org.bukkit.event.entity.EntityPickupItemEvent;
 import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryDragEvent;
 import org.bukkit.event.player.PlayerDropItemEvent;
@@ -378,5 +379,16 @@ public class ReplayInventoryUI implements Listener {
                 || dropName.equals("\u23EA Slower") || dropName.equals("\u23E9 Faster")) {
             e.setCancelled(true);
         }
+    }
+
+    @EventHandler(priority = EventPriority.HIGH)
+    public void onEntityPickupItem(EntityPickupItemEvent e) {
+        if (!sessionControl.isActive())
+            return;
+
+        if (!viewer.equals(e.getEntity()))
+            return;
+
+        e.setCancelled(true);
     }
 }

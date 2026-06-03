@@ -2,6 +2,7 @@ package me.justindevb.replay.playback;
 
 import me.justindevb.replay.entity.RecordedEntity;
 import org.bukkit.entity.Player;
+import org.bukkit.event.entity.EntityPickupItemEvent;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.PlayerInventory;
 import org.junit.jupiter.api.BeforeEach;
@@ -38,7 +39,7 @@ class ReplayInventoryUITest {
 
     @BeforeEach
     void setUp() {
-        when(viewer.getInventory()).thenReturn(playerInventory);
+        lenient().when(viewer.getInventory()).thenReturn(playerInventory);
     }
 
     @Test
@@ -112,5 +113,39 @@ class ReplayInventoryUITest {
         ui2.restoreInventory();
 
         verify(playerInventory).setItemInOffHand(originalOffHand);
+    }
+
+    @Test
+    void onEntityPickupItem_activeViewerCancelsPickup() {
+        EntityPickupItemEvent event = mock(EntityPickupItemEvent.class);
+        when(event.getEntity()).thenReturn(viewer);
+
+        ReplayInventoryUI ui = new ReplayInventoryUI(viewer, emptyEntities, noOpControl);
+
+        ui.onEntityPickupItem(event);
+
+        verify(event).setCancelled(true);
+    }
+
+    @Test
+    void onEntityPickupItem_inactiveSessionLeavesPickupUnchanged() {
+        EntityPickupItemEvent event = mock(EntityPickupItemEvent.class);
+
+        ReplayInventoryUI ui = new ReplayInventoryUI(viewer, emptyEntities, sessionControl(false));
+
+        ui.onEntityPickupItem(event);
+
+        verify(event, never()).setCancelled(true);
+    }
+
+    private ReplayInventoryUI.SessionControl sessionControl(boolean active) {
+        return new ReplayInventoryUI.SessionControl() {
+            @Override public void togglePause() {}
+            @Override public void skipSeconds(int seconds) {}
+            @Override public void stepTick(int direction) {}
+            @Override public void changeSpeed(int direction) {}
+            @Override public void stop() {}
+            @Override public boolean isActive() { return active; }
+        };
     }
 }
