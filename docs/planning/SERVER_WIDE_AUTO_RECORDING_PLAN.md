@@ -1,26 +1,33 @@
 # Server-Wide Auto Recording Plan
 
-This document outlines two related recording features:
+This plan covers three related capabilities:
 
-- a manual `record all players` mode that records every player on the server, including players who join after recording has already started
-- an auto-record mode that can continuously record either one named player or all players, breaking recordings into fixed-duration segments
+- dynamic player enrollment for an already-running recording
+- one-off all-player recording
+- rolling auto-recording for either one player or all players
 
-Example: with 30-minute segments enabled, BetterReplay should produce 48 recordings per day.
+The important design point is that dynamic enrollment is the reusable primitive. Server-wide recording and future recording modes should use the same add-player path instead of each feature inventing its own join logic.
 
-## Goal
+Example: with 30-minute auto-record segments enabled, BetterReplay should produce 48 recordings per day while eligible targets are present.
 
-Add two closely related capabilities:
+## Goals
 
-1. A server-wide recording mode that records all online players at session start and automatically enrolls players who join while the session is active.
-2. An auto-record mode that monitors either a named player or all players and rolls over to a new replay after a configured segment duration.
+Add these capabilities in a way that fits the current recording pipeline:
+
+1. Allow a player to be added to a running recording through internal code, commands, and the public API.
+2. Add an all-player recording mode that starts with current online players and can enroll qualifying joiners while active.
+3. Add a rolling auto-record controller that creates fixed-duration segments for `all` or a named player.
+4. Keep `RecordingSession` as the low-level recording primitive and put policy in manager/controller classes.
 
 ## Non-Goals for the First Iteration
 
-- No retroactive capture for time before a player joined the server or before recording was enabled.
-- No merging of multiple segment files into a single replay.
+- No retroactive capture for time before a player was added to the recording.
+- No merging of multiple segment files into one replay.
 - No cross-server or proxy-wide coordination.
-- No retention or pruning policy in the first implementation.
-- No changes to replay playback format unless the dynamic join flow truly requires them.
+- No retention or pruning policy as part of the first implementation.
+- No new storage backend behavior.
+- No new timeline event type unless existing playback cannot reliably spawn a late-joining player from the first `PlayerMove` snapshot.
+- No config option that changes the meaning of `all`; an all-player recording should naturally include future joiners.
 
 ## Current Constraints in the Codebase
 
@@ -28,202 +35,297 @@ The current implementation is optimized for a fixed player list chosen when the 
 
 - `RecorderManager.startSession(...)` creates a `RecordingSession` from a `Collection<Player>`.
 - `RecordingSession` constructs `EntityTracker` once and treats that tracked-player set as the session scope.
-- `EntityTracker` supports removing players but not adding them later.
+- `EntityTracker` supports removing and clearing players but not adding players after construction.
+- `RecordingSession.captureInitialInventory()` only runs during `start()`.
 - `RecordingEventHandler.onQuit(...)` records `PlayerQuit` and removes that player from the tracked set.
-- `/replay start` currently requires explicit player names.
+- `RecorderManager` and `ReplayManager` do not expose a method for adding players to an active recording.
+- `/replay start` currently requires explicit online player names.
 
-This means the missing capability is not mainly storage. The missing capability is a runtime enrollment and rollover controller around the existing recording pipeline.
+This means the missing capability is not mainly storage. The missing capability is a runtime enrollment primitive plus a small policy layer around the existing recording pipeline.
+
+## Design Principles
+
+- Keep `RecordingSession` responsible for recording mechanics: tracked players, snapshots, ticks, append logs, chunk capture, stop, and save.
+- Keep `RecorderManager` responsible for active session registration, lookup, tick ownership, and manager-level operations.
+- Put all-player and auto-record policy in a controller/listener layer, not inside `RecordingEventHandler`.
+- Add players through one code path so manual add, all-player join, target rejoin, and future modes behave consistently.
+- Keep Bukkit API access on the server thread through the existing FoliaLib scheduling rules.
+- Add any new config keys through `ReplayConfigSetting` with explicit `ReplayConfigReloadScope` values.
+- Preserve existing targeted `/replay start` behavior unless a change is explicitly documented and tested.
 
 ## Recommended Feature Shape
 
-### 1. Server-Wide Session Mode
+### 1. Dynamic Enrollment Primitive
 
-Introduce an explicit session scope so a recording can be either:
+Add player enrollment as a first-class operation before adding auto-recording.
 
-- `TARGETED`: current behavior, fixed set of players chosen at command time
-- `SERVER_WIDE`: current online players plus players who join while the session is active
-
-This can be represented as either:
-
-- a `RecordingScope` enum on `RecordingSession`, or
-- a small session-options record passed into `RecorderManager` and `RecordingSession`
-
-The second option is more extensible because the same options object can later carry auto-record metadata.
-
-### 2. Rolling Auto-Record Controller
-
-Add a dedicated coordinator for long-running server-wide recording. Recommended name:
-
-- `AutoRecordController`
-
-Responsibilities:
-
-- resolve the configured target selector
-- start a recording session only when at least one target player is present
-- listen for `PlayerJoinEvent`
-- enroll joining players into the active session when allowed by the session target mode
-- stop and save the active session when the configured segment duration is reached
-- immediately start the next session if at least one target player is available
-- stay idle and continue monitoring if no target player is available yet
-- expose whether auto-record is enabled and which segment is active
-
-This controller should own the policy. `RecordingSession` should remain a generic recording primitive.
-
-## Proposed Runtime Design
-
-### Session Options
-
-Introduce a small immutable options object, for example:
+Recommended low-level additions:
 
 ```java
-public record RecordingSessionOptions(
-        RecordingScope scope,
-        RecordingTarget target,
-        int durationSeconds,
-        boolean autoRecordSegment,
-        String sessionNamePrefix
-) {}
+public boolean addPlayer(UUID uuid)
 ```
 
-`TARGETED` sessions can continue behaving exactly as they do today by creating options equivalent to the current command path.
+on `EntityTracker`, returning `true` only when the UUID was newly added.
 
-### Recording Target Model
+```java
+public RecordingPlayerAddResult addTrackedPlayer(Player player)
+```
 
-Manual record-all and auto-record need a target model that can be used both by commands and the public API.
+on `RecordingSession`.
 
-Recommended shape:
+Recommended manager/API additions:
+
+```java
+RecordingPlayerAddResult addPlayerToSession(String recordingName, Player player);
+RecordingPlayerAddResult addPlayerToRecording(String recordingName, Player player);
+```
+
+Use a result enum instead of a bare boolean so commands and integrations can give precise feedback:
+
+```java
+public enum RecordingPlayerAddResult {
+    ADDED,
+    ALREADY_TRACKED,
+    SESSION_NOT_FOUND,
+    SESSION_STOPPED,
+    PLAYER_OFFLINE
+}
+```
+
+Expected behavior:
+
+- adding the same online player twice is idempotent
+- adding to a stopped or missing session fails cleanly
+- adding an offline player fails for this first iteration
+- a successful add emits a baseline snapshot at the current recording tick
+- normal movement, inventory, equipment, block, combat, and packet capture begin from that point forward
+
+### 2. Session Target and Enrollment Policy
+
+Separate the desired target from the currently tracked online player set.
+
+Recommended model:
 
 ```java
 public sealed interface RecordingTarget permits RecordingTarget.AllPlayers, RecordingTarget.Players {
     record AllPlayers() implements RecordingTarget {}
     record Players(Set<UUID> playerUuids) implements RecordingTarget {}
 }
+
+public enum RecordingEnrollmentPolicy {
+    MANUAL_ONLY,
+    TARGET_PLAYERS_ON_JOIN,
+    ALL_PLAYERS_ON_JOIN
+}
+
+public record RecordingSessionOptions(
+        RecordingTarget target,
+        RecordingEnrollmentPolicy enrollmentPolicy,
+        int durationSeconds,
+        boolean autoRecordSegment
+) {}
 ```
 
-Notes:
+Why this shape is preferable:
 
-- commands can use a player name or the literal word `all`
-- the API can accept a single player, a collection of players, or `RecordingTarget.AllPlayers`
-- runtime tracking should store UUIDs once a player has been resolved, even if a command started from a player name
+- `RecordingTarget` answers who the session is intended to record.
+- `RecordingEnrollmentPolicy` answers whether join events can add players automatically.
+- The active tracked set remains an implementation detail of `RecordingSession`.
+- Future modes can reuse the same target and enrollment model without new ad hoc wildcards.
 
-This avoids using a magic wildcard internally while still giving commands a simple `all` keyword.
+Recommended policy mapping:
 
-### Dynamic Player Enrollment
+| Mode | Target | Enrollment policy |
+|---|---|---|
+| Current manual targeted recording | `Players(...)` | `MANUAL_ONLY` for compatibility, or `TARGET_PLAYERS_ON_JOIN` if rejoin continuity is intentionally added |
+| Manual all-player recording | `AllPlayers` | `ALL_PLAYERS_ON_JOIN` |
+| Auto-record named player | `Players(...)` | `TARGET_PLAYERS_ON_JOIN` |
+| Auto-record all players | `AllPlayers` | `ALL_PLAYERS_ON_JOIN` |
 
-Add an explicit method on `RecordingSession` for joining players:
+Recommendation: design for `TARGET_PLAYERS_ON_JOIN` even if manual targeted recordings keep `MANUAL_ONLY` initially. Recording a named target across reconnects is a natural future behavior, and auto-record of a named player needs it immediately.
 
-```java
-public void addTrackedPlayer(Player player)
-```
+### 3. Enrollment Controller
 
-Recommended behavior when a player is added mid-session:
+Do not hide join policy inside `RecordingEventHandler`.
 
-1. Add the player UUID to `EntityTracker`.
-2. Emit a snapshot at the current tick so playback can materialize the player immediately.
-3. Capture inventory state right away.
-4. Begin including that player in normal per-tick movement capture and event capture from the next tick onward.
+Add a small join/enrollment layer, either as a dedicated `RecordingEnrollmentController` or as a listener owned by `RecorderManager`.
 
-The initial snapshot can likely reuse existing event types:
+Responsibilities:
+
+- listen for `PlayerJoinEvent`
+- find active sessions whose enrollment policy accepts the joining player
+- call the same `addPlayerToSession(...)` path used by commands and API callers
+- notify `AutoRecordController` when a waiting target becomes available
+- avoid duplicate additions when multiple join handlers observe the same player
+
+`RecordingEventHandler` should remain focused on serializing recording-time events for players that are already tracked.
+
+### 4. Rolling Auto-Record Controller
+
+Add a dedicated coordinator for long-running rolling recording.
+
+Recommended name:
+
+- `AutoRecordController`
+
+Responsibilities:
+
+- resolve the configured or command-provided target
+- start a segment only when at least one eligible target is online
+- wait when a named target is offline or the server is empty for `all`
+- stop and save the active segment when the segment duration is reached
+- immediately start the next segment if at least one target is available
+- stay idle after rollover if no target is available
+- expose current status for commands and API callers
+- stop cleanly during plugin disable without scheduling replacement segments
+
+Important implementation detail:
+
+- Do not rely on `RecordingSession` auto-stopping itself for auto-record rollover unless `RecorderManager` exposes a callback that the controller can observe.
+- Prefer starting auto-record segments with an indefinite session duration and let `AutoRecordController` own the segment timer.
+- This lets the controller stop through `RecorderManager.stopSession(...)`, fire normal stop behavior, and start the replacement segment intentionally.
+
+## Dynamic Player Enrollment Details
+
+`RecordingSession.addTrackedPlayer(Player)` should be the canonical path for a late add.
+
+Recommended sequence:
+
+1. Reject null, offline, stopped, or already tracked players with a specific result.
+2. Add the player's UUID to `EntityTracker`.
+3. Emit a `PlayerMove` event at the current tick before inventory or equipment events.
+4. Capture and emit `EquipmentStateUpdate` at the same tick.
+5. Capture and emit `InventoryStorageUpdate` at the same tick.
+6. Update `lastEquipmentState` and `lastInventoryStorageSnapshot` so the next periodic check does not immediately duplicate the same state.
+7. Clear or ignore dirty flags for the newly captured state.
+8. If chunk capture is enabled, capture the player's current chunk interest promptly or guarantee it is picked up on the next configured chunk capture tick.
+
+Snapshot ordering matters. Playback creates recorded players from location-bearing events such as `PlayerMove`. Emitting `PlayerMove` first makes late joins and seek/rebuild behavior more reliable.
+
+The initial snapshot can reuse existing timeline events:
 
 - `PlayerMove` at the current tick with name, world, pose, and location
-- `InventoryUpdate` at the current tick
+- `EquipmentStateUpdate` at the current tick
+- `InventoryStorageUpdate` at the current tick
 
-That is preferable to introducing a new `PlayerJoin` timeline event unless playback proves it needs one.
+Only add a new lifecycle event if tests show that this is insufficient for playback.
 
-### Quit and Rejoin Semantics
+## Quit and Rejoin Semantics
+
+Current quit behavior should remain the foundation:
+
+- emit `PlayerQuit` when a tracked player leaves
+- remove that player from the active tracked set after the quit event
+- keep the recording session active for other tracked players
+
+Recommended rejoin behavior by policy:
+
+| Policy | Rejoin behavior |
+|---|---|
+| `MANUAL_ONLY` | do not automatically re-add the player; an admin or API caller must add them |
+| `TARGET_PLAYERS_ON_JOIN` | re-add the player if their UUID is in the session target set |
+| `ALL_PLAYERS_ON_JOIN` | add every joining player |
 
 For all-player sessions:
 
-- `PlayerQuit` should still be emitted when a tracked player leaves.
-- The player should still be removed from the active tracked set after quit.
-- If the same player rejoins later during the same session, `addTrackedPlayer(Player)` should enroll them again and emit a fresh snapshot.
+- `PlayerQuit` should still despawn that player during playback.
+- Rejoin should emit a fresh `PlayerMove`, equipment, and inventory snapshot.
+- The second appearance should be treated as a new active presence in the same recording, not retroactive continuity.
 
-This keeps the current quit behavior intact while enabling re-enrollment.
-
-For single-player auto-record sessions:
+For named-player auto-record sessions:
 
 - if the tracked player quits, the active segment may continue until its configured duration ends
-- while that segment remains active, no new events are emitted until the target rejoins
-- when the segment ends, the controller should not start the next segment until the target player is online again
+- if the player rejoins before rollover, re-add them and continue the same segment
+- if the segment ends while the player is offline, do not start the next segment until the player returns
 
-For auto-record-all sessions:
+For auto-record all-player sessions:
 
-- if the active segment becomes empty because all players left, let the segment run until its duration completes
+- if the active segment becomes empty because all players left, let that segment run until its duration completes
 - when that segment ends, do not start a replacement segment unless at least one player is online
-
-### Where Join Handling Should Live
-
-Do not hide server-wide policy inside `RecordingEventHandler` alone.
-
-Recommended split:
-
-- `RecordingSession` owns low-level operations such as add player, tick, stop, and save.
-- `AutoRecordController` owns target monitoring, join handling, idle waiting, and rolling segments.
-- `RecorderManager` remains the registry of active sessions and the tick loop owner.
-
-This avoids mixing command policy, server-wide policy, and event serialization logic into one class.
 
 ## Command and UX Design
 
-The command proposal should preserve the current targeted-recording workflow and add explicit admin-facing commands for record-all and auto-record.
+The most natural command shape is to keep `start` as the verb and make `all` a target.
 
-### Recommended Command Surface
+Recommended command surface:
 
-- `/replay start <name> <player1 player2 ...> [durationSeconds]`
-- `/replay recordall <name> [durationSeconds]`
-- `/replay autorecord start <playerName|all> [segmentMinutes] [prefix]`
-- `/replay autorecord stop`
-- `/replay autorecord status`
+| Command | Permission | Console | Purpose |
+|---|---|---|---|
+| `/replay start <name> <player1 player2 ...> [seconds]` | `replay.start` | No, current behavior | Existing targeted recording workflow |
+| `/replay start <name> all [seconds]` | `replay.start.all` | Yes, recommended | Start a one-off all-player recording |
+| `/replay addplayer <recording> <player1 player2 ...>` | `replay.addplayer` | Yes | Add online players to an active recording |
+| `/replay autorecord start <playerName\|all> [segmentMinutes] [prefix]` | `replay.autorecord` | Yes | Start rolling auto-record for a named player or all players |
+| `/replay autorecord stop` | `replay.autorecord` | Yes | Stop rolling auto-record and save the active segment |
+| `/replay autorecord status` | `replay.autorecord` | Yes | Show rolling auto-record state |
 
-This keeps the existing targeted command unchanged while giving auto-record an explicit target argument.
+Notes:
 
-### Command Semantics
+- Keep recording names single-token for this feature. Changing `/replay start` name parsing is a separate command parser change.
+- Reserve `all` as a target keyword in the player-target position.
+- If a real player named `all` needs to be supported, add an explicit `player:<name>` target form before release rather than guessing.
+- Do not add a separate `/replay recordall` command unless there is a strong reason. `/replay start <name> all` reads naturally and matches the existing workflow.
 
-#### `/replay recordall <name> [durationSeconds]`
+### `/replay start <name> all [seconds]`
 
 Purpose:
 
-- start a one-off server-wide recording immediately
-- include all players currently online
-- enroll players who join until the session stops
+- start a one-off all-player recording
+- seed the session with all currently online players
+- add players who join while the session is active
 
 Behavior:
 
-- if `durationSeconds` is omitted, create an indefinite session
-- if a session with the same name already exists, fail with the same duplicate-session behavior used by `/replay start`
-- if auto-record `all` is active, reject this command by default to avoid two overlapping all-player policies competing for the same join events
+- use the existing duplicate session-name failure behavior
+- use existing duration semantics; omitted duration means indefinite
+- if no players are online, prefer failing with a clear message for the first iteration
+- use `/replay autorecord start all` when waiting for future players is desired
 
 Example:
 
 ```text
-/replay recordall evening-build 3600
+/replay start evening-build all 3600
 ```
 
-#### `/replay autorecord start <playerName|all> [segmentMinutes] [prefix]`
+### `/replay addplayer <recording> <player1 player2 ...>`
 
 Purpose:
 
-- enable the continuous rolling recorder for either one named player or all players without requiring a plugin reload
+- explicitly add online players to a currently running recording
+
+Behavior:
+
+- works for targeted, all-player, and auto-record segments
+- reports each requested player as added, already tracked, offline/not found, or session missing
+- does not retroactively capture earlier activity
+- does not change an all-player session differently than a join would; it just uses the same enrollment primitive immediately
+
+Example:
+
+```text
+/replay addplayer incident-42 Steve Alex
+```
+
+This command is useful on its own and is also the public behavior proof that dynamic enrollment works before auto-record is added.
+
+### `/replay autorecord start <playerName|all> [segmentMinutes] [prefix]`
+
+Purpose:
+
+- enable rolling replay segments without requiring a plugin reload
 
 Argument rules:
 
 - `<playerName|all>` is required
-- `segmentMinutes` is optional and overrides config for the current runtime session
-- `prefix` is optional and overrides config for the current runtime session
+- `segmentMinutes` is optional and overrides the config default for the current runtime controller session
+- `prefix` is optional and overrides the config default for the current runtime controller session
+- runtime command choices should not be written back to `config.yml`
 
 Target rules:
 
-- `all` means auto-record all players
+- `all` means all-player auto-record
 - any other value is treated as a player name to monitor
-- if the named player is offline when the command is run, the controller should still enter a waiting state and start the first segment when that player joins
-
-Behavior:
-
-- fail if auto-record is already active
-- fail if a conflicting manual recording is already active for the same effective target scope
-- if at least one target player is currently available, start the first segment immediately
-- if no target player is currently available, enter an idle monitoring state and wait for a qualifying player to join
-- never write runtime command choices back to config
+- if the named player is offline when the command is run, the controller enters a waiting state
+- if target is `all` and the server is empty, the controller enters a waiting state
 
 Examples:
 
@@ -234,47 +336,18 @@ Examples:
 /replay autorecord start Steve 20 suspect
 ```
 
-Recommendation: treat the command as a runtime control only. Startup behavior comes from config, but in-game commands never mutate config.
-
-#### `/replay autorecord stop`
-
-Purpose:
-
-- stop the rolling recorder cleanly
-
-Behavior:
-
-- stop scheduling replacement segments
-- stop the active segment with save enabled
-- leave targeted recordings unaffected
-
-#### `/replay autorecord status`
-
-Purpose:
-
-- expose the current auto-record state for admins
+### `/replay autorecord status`
 
 Recommended output:
 
 - enabled or disabled
-- target mode: `all` or player name
-- active segment replay name
-- configured segment duration
-- active prefix
+- target: `all` or player name
+- active segment replay name, if any
+- segment duration
+- active name prefix
 - current segment start time
 - next scheduled rollover time
-- waiting-for-target state when no segment is currently active
-
-### Permission Proposal
-
-Add explicit permissions instead of reusing only `replay.start`:
-
-- `replay.recordall`: start one-off server-wide recordings
-- `replay.autorecord`: start, stop, and inspect rolling auto-record
-
-Update `replay.*` to include both new permissions.
-
-This keeps targeted recording permissions separate from full-server capture permissions.
+- waiting state when no segment is active
 
 ### Help and Tab Completion
 
@@ -282,27 +355,41 @@ Update `/replay` help text and completions to make the new surface discoverable.
 
 Recommended help lines:
 
-- `/replay recordall <name> [seconds] - Start recording all players`
+- `/replay start <name> all [seconds] - Start recording all online and joining players`
+- `/replay addplayer <recording> <players...> - Add online players to an active recording`
 - `/replay autorecord start <player|all> [minutes] [prefix] - Start rolling auto-record`
 - `/replay autorecord stop - Stop rolling auto-record`
 - `/replay autorecord status - Show rolling auto-record status`
 
 Recommended completion behavior:
 
+- after `/replay start <name>`, suggest online player names plus the literal `all`
+- after `/replay addplayer`, suggest active recording names
+- after `/replay addplayer <recording>`, suggest online player names not already tracked by that session when feasible
 - after `/replay autorecord`, suggest `start`, `stop`, and `status`
 - after `/replay autorecord start`, suggest online player names plus the literal `all`
 - after `/replay autorecord start <player|all>`, suggest the configured default segment minutes as a hint
-- after `/replay recordall`, suggest no player names because the command takes none
+
+## Permission Proposal
+
+Add explicit permissions instead of treating full-server capture as ordinary targeted recording:
+
+- `replay.start`: existing targeted recording
+- `replay.start.all`: one-off all-player recording
+- `replay.addplayer`: add players to active recordings
+- `replay.autorecord`: start, stop, and inspect rolling auto-record
+- `replay.*`: include all of the above
+
+This keeps targeted recording permissions separate from full-server capture and live session mutation.
 
 ## Configuration Design
 
-Add a dedicated config section instead of placing these keys under `General`. The config should provide startup defaults and all-player join behavior, but it should not act as a general runtime enable switch.
+Configuration should provide startup defaults for auto-record. It should not be a general runtime state store, and command/API choices should remain in memory only.
 
 Suggested shape:
 
 ```yaml
 Recording:
-  Join-Players-During-Active-All-Recordings: true
   Auto-Record:
     Record-On-Startup: false
     Startup-Target: all
@@ -312,101 +399,43 @@ Recording:
     Name-Timezone: UTC
 ```
 
-### Key Semantics
+Do not add `Join-Players-During-Active-All-Recordings` in the first iteration. If a session target is `all`, joining players should be included. A toggle that makes `all` mean only current players would make the feature harder to reason about.
 
-#### `Recording.Join-Players-During-Active-All-Recordings`
+Recommended config keys and reload scopes:
 
-- should default to `true`
+| Key | Default | Reload scope | Notes |
+|---|---|---|---|
+| `Recording.Auto-Record.Record-On-Startup` | `false` | `FUTURE_ONLY` | Starts auto-record policy during plugin startup only |
+| `Recording.Auto-Record.Startup-Target` | `all` | `FUTURE_ONLY` | `all` or a player name used when startup recording is enabled |
+| `Recording.Auto-Record.Segment-Duration-Minutes` | `30` | `NEW_SESSIONS_ONLY` | Default segment length for startup and command starts that omit minutes |
+| `Recording.Auto-Record.Name-Prefix` | `auto` | `NEW_SESSIONS_ONLY` | Default generated replay-name prefix |
+| `Recording.Auto-Record.Save-Active-Segment-On-Shutdown` | `true` | `IMMEDIATE` | Whether graceful shutdown saves the active auto-record segment |
+| `Recording.Auto-Record.Name-Timezone` | `UTC` | `NEW_SESSIONS_ONLY` | Time zone used in generated segment names |
 
-- controls whether new players are added automatically during an active all-player recording
-- applies to `/replay recordall` and auto-record with target `all`
-- does not apply to targeted manual recordings or auto-record of a single named player
-
-Required config comment:
-
-- make it explicit that this only affects recordings whose target mode is all players
-
-#### `Recording.Auto-Record.Record-On-Startup`
-
-- when `true`, start the auto-record controller during plugin enable using the configured startup target
-- when `false`, auto-record remains off until explicitly started by command or API
-
-Recommendation: use `Record-On-Startup` instead of `Resume-On-Startup`. It is clearer that the plugin is activating auto-record policy on startup, not resuming a serialized in-memory state.
-
-#### `Recording.Auto-Record.Startup-Target`
-
-- the startup target for auto-record
-- accepted values should be `all` or a player name
-- if the configured player is offline at startup, the controller should enter a waiting state and begin recording when that player joins
-- if the value is `all` and no players are online at startup, the controller should wait rather than create a blank segment
-
-#### `Recording.Auto-Record.Segment-Duration-Minutes`
-
-- duration of each segment in minutes
-- should be the single canonical duration setting for auto-record mode
-- recommended minimum: `1`
-- recommended default: `30`
-
-#### `Recording.Auto-Record.Name-Prefix`
-
-- prefix for replay naming
-- should be sanitized to a filesystem-safe subset if the storage backend uses file names directly
-- recommended default: `auto`
-
-#### `Recording.Auto-Record.Save-Active-Segment-On-Shutdown`
-
-- when `true`, graceful shutdown saves the active segment
-- when `false`, graceful shutdown discards the active segment and relies on append-log recovery only for crashes
-
-Recommendation: default this to `true` because discarding a graceful-shutdown segment would be surprising.
-
-#### `Recording.Auto-Record.Name-Timezone`
-
-- controls how timestamps are rendered in generated replay names
-- acceptable values should be either `UTC` or a valid Java `ZoneId`
-
-Recommendation: default to `UTC` so generated names are stable across daylight-saving transitions.
-
-### Validation Rules
+Validation rules:
 
 - reject `Segment-Duration-Minutes <= 0`
 - reject blank `Name-Prefix`
-- reject prefixes containing characters that are invalid for file-backed replay names
-- validate `Name-Timezone` against `ZoneId.of(...)` and fall back to `UTC` with a warning if invalid
+- reject prefixes containing characters invalid for file-backed replay names
+- validate `Name-Timezone` with `ZoneId.of(...)` and fall back to `UTC` with a warning if invalid
 - reject blank `Startup-Target`
 - log the effective startup auto-record configuration when `Record-On-Startup` is enabled
 
-### Config and Command Interaction
+Config and command precedence:
 
-The runtime model should be explicit.
-
-Recommended precedence:
-
-1. in-game command or API call for the current runtime session
+1. command or API call for the current runtime controller session
 2. startup config values
-3. built-in enum defaults
+3. built-in defaults from `ReplayConfigSetting`
 
 Examples:
 
 - plugin startup can auto-start `all` or a named player based on config
 - `/replay autorecord start Steve 15` overrides the current runtime session but does not rewrite config
-- if config says `Record-On-Startup: true` and an admin stops auto-record in game, it stays stopped until restart, then starts again from config
-
-Recommendation: keep command and API overrides in memory only. They supersede what startup created for the current runtime, but they never mutate `config.yml`.
-
-### Backward Compatibility and Migration
-
-This is a new config section, so migration can be additive:
-
-- add defaults through `ReplayConfigSetting`
-- treat all keys as optional with explicit fallbacks
-- do not require existing servers to regenerate config files
-
-If a future config version migration system is introduced, these keys should be added without changing existing recording defaults.
+- if config says `Record-On-Startup: true` and an admin stops auto-record in game, it stays stopped until restart
 
 ## Replay Naming Strategy
 
-Rolling recordings need collision-resistant names.
+Rolling recordings need deterministic, collision-resistant names.
 
 Recommended format:
 
@@ -422,9 +451,10 @@ auto-2026-04-28-10-30-00
 
 Recommendations:
 
-- use wall-clock start time for naming, not stop time
-- format in server-local time or UTC, but choose one and document it
-- if a name collision occurs, append a short numeric suffix rather than failing the entire rollover
+- use wall-clock segment start time, not stop time
+- use the configured `Name-Timezone`
+- append a short numeric suffix if a name collision occurs
+- do not fail rollover only because the generated name already exists
 
 ## Rollover Behavior
 
@@ -433,14 +463,12 @@ For a 30-minute configuration, the controller should produce one replay per 30-m
 Recommended rollover sequence:
 
 1. Detect that the active segment duration has been reached.
-2. Stop the current session and trigger save.
+2. Stop the current session through `RecorderManager.stopSession(name, true)`.
 3. If at least one target player is available, immediately create the next session.
-4. If no target player is available, switch to a waiting state instead of creating a blank session.
+4. If no target player is available, switch to a waiting state instead of creating a blank segment.
 5. Continue join enrollment against the new active session when the target mode allows it.
 
-Important detail:
-
-`RecordingSession.stop(true)` already persists asynchronously after the append-log is finalized. That means a replacement session can be started immediately after stop without waiting for storage completion.
+`RecordingSession.stop(true)` persists asynchronously after the append log is finalized. A replacement segment can start immediately after the old session is stopped without waiting for storage completion.
 
 This keeps recording gaps as small as possible.
 
@@ -450,21 +478,25 @@ This keeps recording gaps as small as possible.
 
 When `Record-On-Startup` is enabled:
 
-1. load config
-2. recover pending append logs first
-3. start the controller
-4. resolve the configured startup target
-5. create the initial session only if at least one target player is available, otherwise enter a waiting state
+1. initialize config
+2. initialize storage and replay cache
+3. recover pending append logs
+4. start `AutoRecordController`
+5. resolve the configured startup target
+6. create the initial segment only if at least one target player is available, otherwise enter a waiting state
 
-Recovery should happen before auto-record starts, otherwise a crash-recovered segment and a new live segment can overlap in confusing ways.
+Recovery should happen before auto-record starts. Otherwise, a crash-recovered segment and a new live segment can overlap in confusing ways.
 
 ### Shutdown
 
 On plugin disable:
 
-- stop the controller first so it does not schedule a replacement segment during shutdown
-- stop the active session with save enabled if the plugin is performing a normal shutdown
-- preserve the existing append-log crash recovery behavior for hard crashes
+- stop `AutoRecordController` first so it cannot schedule a replacement segment
+- if configured, stop the active auto-record segment with save enabled
+- then let the normal recorder shutdown handle any remaining non-auto sessions
+- preserve append-log crash recovery behavior for hard crashes
+
+Current `RecorderManager.shutdown()` stops active sessions with `save=false`. Auto-record save-on-shutdown needs either a controller-owned stop before that call or a manager shutdown overload that can apply a save policy.
 
 ## Storage and Playback Impact
 
@@ -472,16 +504,17 @@ This feature should fit the current binary append-log and replay archive flow.
 
 Expected storage impact:
 
-- more concurrent event volume because all players are tracked
-- many more replay files for auto-record mode
-- more frequent save operations due to rolling segments
+- higher event volume when all players are tracked
+- many more replay files in auto-record mode
+- more frequent save operations because of rolling segments
 
 Expected playback impact:
 
-- no new format requirement if a mid-session join is represented by existing `PlayerMove` and `InventoryUpdate` events
+- no new format requirement if a late add is represented by `PlayerMove`, `EquipmentStateUpdate`, and `InventoryStorageUpdate`
 - existing `PlayerQuit` remains sufficient for despawn behavior
+- seek/rebuild behavior must be tested because first-event ordering affects `RecordedEntityFactory`
 
-Only add a new timeline event type if testing shows that playback cannot consistently spawn a late-joining player from the first `PlayerMove` snapshot.
+Only add a new timeline event type if playback cannot consistently spawn a late-added player from the first `PlayerMove` snapshot.
 
 ## Concurrency and Threading Notes
 
@@ -489,41 +522,58 @@ Keep all enrollment and rollover decisions on the server thread.
 
 Specific rules:
 
-- `PlayerJoinEvent` enrollment must run synchronously on the server thread
-- session creation and stop decisions must stay on the same thread as the existing tick loop
-- async storage completion must not mutate active session state directly
+- `EntityTracker` currently uses `HashSet` and `HashMap`, so session mutation must not happen concurrently with ticking.
+- `PlayerJoinEvent` enrollment must run synchronously on the server thread.
+- command and API calls that mutate sessions should schedule onto the server thread if called off-thread.
+- async storage completion must not mutate active session state directly.
+- `getTrackedPlayers()` should not be used by new code as a mutable control surface; prefer manager/session methods or defensive snapshots.
 
 This aligns with the project rule that Bukkit API access must remain on the server thread.
 
 ## Recommended Implementation Sequence
 
-### Phase 1: Add Session Options and Dynamic Enrollment
+### Phase 1: Dynamic Enrollment Primitive
 
-- introduce `RecordingScope` or `RecordingSessionOptions`
-- add `EntityTracker.addPlayer(UUID)` or `addPlayer(Player)` support
+- add `EntityTracker.addPlayer(UUID)` with idempotent behavior
 - add `RecordingSession.addTrackedPlayer(Player)`
-- add regression tests for late join and rejoin in the same session
+- emit `PlayerMove` before inventory/equipment snapshots for late-added players
+- add `RecorderManager.addPlayerToSession(...)`
+- add `ReplayManager.addPlayerToRecording(...)`
+- add `/replay addplayer <recording> <players...>`
+- add regression tests for late add, duplicate add, stopped session, and snapshot ordering
 
-### Phase 2: Add Manual Server-Wide Recording
+### Phase 2: Session Options and Join Enrollment Policy
 
-- add a new command path for `/replay recordall`
+- introduce `RecordingTarget`, `RecordingEnrollmentPolicy`, and `RecordingSessionOptions`
+- add a `RecorderManager.startSession(...)` overload that accepts options
+- add a join enrollment listener/controller
+- decide whether manual targeted recordings should re-add original targets on rejoin now or later
+- add tests for `MANUAL_ONLY`, `TARGET_PLAYERS_ON_JOIN`, and `ALL_PLAYERS_ON_JOIN`
+
+### Phase 3: Manual All-Player Recording
+
+- add `/replay start <name> all [seconds]`
 - seed the session with `Bukkit.getOnlinePlayers()`
-- enroll players who join after session start
-- add tests for command parsing and join-time enrollment
+- enroll joiners through the same dynamic add path
+- add tests for command parsing, permission split, current players, and join-time enrollment
 
-### Phase 3: Add Auto-Record Controller
+### Phase 4: Auto-Record Controller
 
 - create `AutoRecordController`
 - wire startup and shutdown behavior
 - add target resolution, waiting-state handling, and segment naming
+- make the controller own rollover timing instead of relying on `RecordingSession` duration auto-stop
 - add tests for exact rollover counts and replacement-session startup
 
-### Phase 4: Config and Documentation
+### Phase 5: Config, API Docs, and User Docs
 
-- add config keys and validation
+- add config keys through `ReplayConfigSetting`
 - update `README.md`
-- update `docs/API.md` for record-all and auto-record API methods
-- add `CHANGELOG.md` entries for the user-facing feature
+- update `docs/CONFIGURATION.md`
+- update `docs/COMMANDS.md`
+- update `docs/ARCHITECTURE.md`
+- update `docs/API.md` for new public API methods and examples
+- add `CHANGELOG.md` entries for the user-facing and API-facing changes
 
 ## Test Plan
 
@@ -531,10 +581,16 @@ The feature needs regression coverage before implementation is considered comple
 
 ### Unit Tests
 
-- starting a server-wide session seeds all online players
-- player joining an active server-wide session is added exactly once
-- player quitting and rejoining during the same session is recorded correctly
-- a targeted session still does not auto-enroll unrelated players
+- `EntityTracker.addPlayer` adds a new UUID and reports duplicates
+- `RecordingSession.addTrackedPlayer` emits `PlayerMove` before inventory/equipment snapshots
+- adding a player to an active recording starts per-tick movement capture
+- adding the same player twice does not duplicate tracking or snapshots
+- adding to a stopped session fails
+- adding an offline player fails cleanly
+- player joining an active all-player session is added exactly once
+- player quitting and rejoining an all-player session emits `PlayerQuit` and a fresh snapshot
+- a `MANUAL_ONLY` targeted session does not auto-enroll unrelated players
+- a `TARGET_PLAYERS_ON_JOIN` session re-adds configured targets when they rejoin
 - auto-record for a named offline player waits and starts on join
 - auto-record `all` does not create a blank segment when the server is empty
 - an active segment may complete after all tracked players leave, but no replacement starts until a target is present
@@ -542,41 +598,60 @@ The feature needs regression coverage before implementation is considered comple
 - controller does not start duplicate active segments
 - generated names are unique and deterministic
 
+### Command Tests
+
+- `/replay start <name> all [seconds]` uses `replay.start.all`
+- `/replay start <name> all [seconds]` rejects duplicate names
+- `/replay addplayer <recording> <players...>` reports per-player results
+- `/replay autorecord status` reports waiting and active states
+- tab completion suggests `all` where appropriate
+
 ### Integration-Style Tests
 
 - startup with auto-record enabled starts a live segment after append-log recovery
 - startup with `Record-On-Startup` enabled waits correctly when the configured target is absent
-- shutdown stops the active segment without scheduling a replacement
+- shutdown saves the active auto-record segment when configured
 - async save failure of one segment does not prevent the next segment from running
+- playback can seek across a late-added player's first snapshot and later `PlayerQuit`
 
 ### Performance Checks
 
 - measure tick cost with many simultaneously tracked players
 - measure replay count growth for small segment durations
-- confirm that packet listener registration does not duplicate unexpectedly across rollovers
+- confirm that PacketEvents listener registration does not duplicate unexpectedly across rollovers
+- confirm chunk capture cost remains bounded when every online player is tracked
 
 ## Risks and Open Questions
 
 ### 1. Event Volume
 
-Recording all players continuously can multiply movement and inventory traffic quickly. If tick cost becomes unacceptable, the next optimization step should be shared capture infrastructure rather than multiple specialized server-wide sessions.
+Recording all players continuously can multiply movement, inventory, equipment, block, and entity traffic quickly. If tick cost becomes unacceptable, the next optimization step should be shared capture infrastructure rather than multiple specialized server-wide sessions.
 
 ### 2. Initial Snapshot Completeness
 
-Late joiners will need a good enough initial snapshot for playback to feel correct. If `PlayerMove` plus `InventoryUpdate` is insufficient, the design may need an explicit lifecycle event for player appearance.
+Late-added players need a good enough initial snapshot for playback and seeking. `PlayerMove` plus inventory and equipment snapshots should be tested first. Add a dedicated lifecycle event only if playback proves it needs one.
 
-### 3. Replay Proliferation
+### 3. Chunk Baseline Timing
 
-Auto-record mode can create large numbers of replays. At 30 minutes per segment, the plugin will create 48 recordings per day. Storage growth and future retention tooling should be tracked as follow-up work.
+If chunk capture is enabled, a player added between capture intervals may move before nearby chunk baselines are captured. The implementation should either capture their current chunk interest immediately or document that the next interval is the boundary.
 
-### 4. API Surface
+### 4. Replay Proliferation
 
-Expose both manual all-player recording and auto-record through additive `ReplayManager` methods rather than changing the meaning of `startRecording(String, Collection<Player>, int)`.
+Auto-record mode can create many replays. At 30 minutes per segment, the plugin creates up to 48 recordings per day per active auto-record target policy. Storage growth and retention tooling should be tracked as follow-up work.
+
+### 5. `all` Keyword Collision
+
+`all` is a natural target keyword, but it could theoretically collide with a player name. If that matters before release, add explicit target prefixes such as `player:<name>` and `all` rather than guessing from context.
+
+### 6. API Surface
+
+Expose new behavior through additive `ReplayManager` methods rather than changing the meaning of `startRecording(String, Collection<Player>, int)`.
 
 Recommended API additions:
 
 ```java
-boolean recordAll(String name, int durationSeconds);
+RecordingPlayerAddResult addPlayerToRecording(String recordingName, Player player);
+boolean startRecordingAll(String name, int durationSeconds);
 boolean startAutoRecording(String namePrefix, RecordingTarget target, int segmentDurationSeconds);
 boolean stopAutoRecording(boolean saveActiveSegment);
 Optional<AutoRecordingStatus> getAutoRecordingStatus();
@@ -585,33 +660,29 @@ Optional<AutoRecordingStatus> getAutoRecordingStatus();
 Compatibility guidance:
 
 - keep `startRecording(String, Collection<Player>, int)` for targeted manual recordings
-- add a convenience overload for a single player if desired
 - use `RecordingTarget.AllPlayers` to signal all players through the API instead of overloading `null` or an empty collection
+- document whether session mutation API methods must be called on the server thread or internally schedule through FoliaLib
 
 Recommended convenience overloads:
 
 ```java
-default boolean startRecording(String name, Player player, int durationSeconds)
-default boolean startAutoRecording(String namePrefix, Player player, int segmentDurationSeconds)
-default boolean startAutoRecording(String namePrefix, Collection<Player> players, int segmentDurationSeconds)
+boolean startRecording(String name, Player player, int durationSeconds);
+Map<UUID, RecordingPlayerAddResult> addPlayersToRecording(String recordingName, Collection<Player> players);
+boolean startAutoRecording(String namePrefix, Player player, int segmentDurationSeconds);
 ```
-
-For API semantics:
-
-- a single-player auto-record should monitor that player even while offline
-- a collection-based auto-record should monitor any configured player in the collection and start segments only when at least one is online
-- `RecordingTarget.AllPlayers` should behave like the command target `all`
 
 ## Recommendation Summary
 
-Implement this as a thin controller around the existing recording pipeline rather than a new recording system.
+Implement this as a thin policy layer around the existing recording pipeline rather than a new recording system.
 
 The smallest durable design is:
 
-- keep `RecordingSession` as the core recorder
-- teach it to enroll players dynamically
-- add an `AutoRecordController` for target monitoring and timed rollovers
-- expose `recordAll` and auto-record through both commands and the public API
-- keep config limited to startup defaults and the all-player join policy
+- teach `RecordingSession` to add players dynamically
+- expose dynamic add through `RecorderManager`, `ReplayManager`, and `/replay addplayer`
+- represent desired targets separately from the active tracked set
+- add join enrollment policy for all-player and target-rejoin behavior
+- use `/replay start <name> all [seconds]` for one-off all-player recordings
+- add `AutoRecordController` for waiting, segment naming, and rollover
+- keep config limited to startup auto-record defaults
 
-That approach matches the current architecture, minimizes storage churn, and keeps the first implementation focused on the actual missing behavior.
+That approach matches the current architecture, makes the user-facing commands feel consistent, and creates the reusable add-player foundation needed for future recording modes.
