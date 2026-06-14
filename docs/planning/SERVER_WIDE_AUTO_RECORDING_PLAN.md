@@ -4,7 +4,7 @@ This plan covers three related capabilities:
 
 - dynamic player enrollment for an already-running recording
 - one-off all-player recording
-- rolling auto-recording for either one player or all players
+- rolling auto-recording for one or more players or all players
 
 The important design point is that dynamic enrollment is the reusable primitive. Server-wide recording and future recording modes should use the same add-player path instead of each feature inventing its own join logic.
 
@@ -16,7 +16,7 @@ Add these capabilities in a way that fits the current recording pipeline:
 
 1. Allow a player to be added to a running recording through internal code, commands, and the public API.
 2. Add an all-player recording mode that starts with current online players and can enroll qualifying joiners while active.
-3. Add a rolling auto-record controller that creates fixed-duration segments for `all` or a named player.
+3. Add a rolling auto-record controller that creates fixed-duration segments for `all` or one or more named players.
 4. Keep `RecordingSession` as the low-level recording primitive and put policy in manager/controller classes.
 
 ## Non-Goals for the First Iteration
@@ -139,10 +139,10 @@ Recommended policy mapping:
 |---|---|---|
 | Current manual targeted recording | `Players(...)` | `MANUAL_ONLY` for compatibility, or `TARGET_PLAYERS_ON_JOIN` if rejoin continuity is intentionally added |
 | Manual all-player recording | `AllPlayers` | `ALL_PLAYERS_ON_JOIN` |
-| Auto-record named player | `Players(...)` | `TARGET_PLAYERS_ON_JOIN` |
+| Auto-record named player(s) | `Players(...)` | `TARGET_PLAYERS_ON_JOIN` |
 | Auto-record all players | `AllPlayers` | `ALL_PLAYERS_ON_JOIN` |
 
-Recommendation: design for `TARGET_PLAYERS_ON_JOIN` even if manual targeted recordings keep `MANUAL_ONLY` initially. Recording a named target across reconnects is a natural future behavior, and auto-record of a named player needs it immediately.
+Recommendation: design for `TARGET_PLAYERS_ON_JOIN` even if manual targeted recordings keep `MANUAL_ONLY` initially. Recording named targets across reconnects is a natural future behavior, and auto-record of named players needs it immediately.
 
 ### 3. Enrollment Controller
 
@@ -172,7 +172,7 @@ Responsibilities:
 
 - resolve the configured or command-provided target
 - start a segment only when at least one eligible target is online
-- wait when a named target is offline or the server is empty for `all`
+- wait when all named targets are offline or the server is empty for `all`
 - stop and save the active segment when the segment duration is reached
 - immediately start the next segment if at least one target is available
 - stay idle after rollover if no target is available
@@ -234,9 +234,9 @@ For all-player sessions:
 
 For named-player auto-record sessions:
 
-- if the tracked player quits, the active segment may continue until its configured duration ends
-- if the player rejoins before rollover, re-add them and continue the same segment
-- if the segment ends while the player is offline, do not start the next segment until the player returns
+- if a tracked player quits, the active segment may continue until its configured duration ends
+- if a target player rejoins before rollover, re-add them and continue the same segment
+- if the segment ends while all target players are offline, do not start the next segment until at least one target returns
 
 For auto-record all-player sessions:
 
@@ -254,7 +254,7 @@ Recommended command surface:
 | `/replay start <name> <player1 player2 ...> [seconds]` | `replay.start` | No, current behavior | Existing targeted recording workflow |
 | `/replay start <name> all [seconds]` | `replay.start.all` | Yes, recommended | Start a one-off all-player recording |
 | `/replay addplayer <recording> <player1 player2 ...>` | `replay.addplayer` | Yes | Add online players to an active recording |
-| `/replay autorecord start <playerName\|all> [segmentMinutes] [prefix]` | `replay.autorecord` | Yes | Start rolling auto-record for a named player or all players |
+| `/replay autorecord start <player1 player2 ...\|all> [segmentMinutes] [prefix]` | `replay.autorecord` | Yes | Start rolling auto-record for named players or all players |
 | `/replay autorecord stop` | `replay.autorecord` | Yes | Stop rolling auto-record and save the active segment |
 | `/replay autorecord status` | `replay.autorecord` | Yes | Show rolling auto-record state |
 
@@ -307,7 +307,7 @@ Example:
 
 This command is useful on its own and is also the public behavior proof that dynamic enrollment works before auto-record is added.
 
-### `/replay autorecord start <playerName|all> [segmentMinutes] [prefix]`
+### `/replay autorecord start <player1 player2 ...|all> [segmentMinutes] [prefix]`
 
 Purpose:
 
@@ -315,17 +315,22 @@ Purpose:
 
 Argument rules:
 
-- `<playerName|all>` is required
+- at least one target is required: either `all` or one or more player names
+- `all` must be the only target token; reject mixed forms such as `all Steve`
 - `segmentMinutes` is optional and overrides the config default for the current runtime controller session
 - `prefix` is optional and overrides the config default for the current runtime controller session
 - runtime command choices should not be written back to `config.yml`
+- for the first iteration, parse the player list until the first positive integer token, then treat that token as `segmentMinutes` and the following token as `prefix`
 
 Target rules:
 
 - `all` means all-player auto-record
-- any other value is treated as a player name to monitor
-- if the named player is offline when the command is run, the controller enters a waiting state
+- any other target values are treated as player names to monitor
+- if all named players are offline when the command is run, the controller enters a waiting state
+- if some named players are online, start the segment with those players and let `TARGET_PLAYERS_ON_JOIN` add the others when they join
 - if target is `all` and the server is empty, the controller enters a waiting state
+
+The multiple-player form is a small command-parser extension, not a recording-pipeline change, because `RecordingTarget.Players(Set<UUID>)` already supports more than one target. The main risk is ambiguity with positional `segmentMinutes`; keeping the first positive integer as the duration delimiter preserves the existing simple command shape but means a numeric-looking player name cannot appear after the first target. If that edge case matters before release, switch to explicit options such as `--minutes` and `--prefix` instead of adding special guesses.
 
 Examples:
 
@@ -334,6 +339,7 @@ Examples:
 /replay autorecord start all 30
 /replay autorecord start all 30 survival
 /replay autorecord start Steve 20 suspect
+/replay autorecord start Steve Alex 20 suspects
 ```
 
 ### `/replay autorecord status`
@@ -341,7 +347,7 @@ Examples:
 Recommended output:
 
 - enabled or disabled
-- target: `all` or player name
+- target: `all` or player names
 - active segment replay name, if any
 - segment duration
 - active name prefix
@@ -357,7 +363,7 @@ Recommended help lines:
 
 - `/replay start <name> all [seconds] - Start recording all online and joining players`
 - `/replay addplayer <recording> <players...> - Add online players to an active recording`
-- `/replay autorecord start <player|all> [minutes] [prefix] - Start rolling auto-record`
+- `/replay autorecord start <players...|all> [minutes] [prefix] - Start rolling auto-record`
 - `/replay autorecord stop - Stop rolling auto-record`
 - `/replay autorecord status - Show rolling auto-record status`
 
@@ -368,7 +374,8 @@ Recommended completion behavior:
 - after `/replay addplayer <recording>`, suggest online player names not already tracked by that session when feasible
 - after `/replay autorecord`, suggest `start`, `stop`, and `status`
 - after `/replay autorecord start`, suggest online player names plus the literal `all`
-- after `/replay autorecord start <player|all>`, suggest the configured default segment minutes as a hint
+- after `/replay autorecord start <players...>`, keep suggesting online player names not already selected and the configured default segment minutes as a hint
+- after `/replay autorecord start all`, suggest the configured default segment minutes as a hint and do not suggest player names
 
 ## Permission Proposal
 
@@ -591,7 +598,8 @@ The feature needs regression coverage before implementation is considered comple
 - player quitting and rejoining an all-player session emits `PlayerQuit` and a fresh snapshot
 - a `MANUAL_ONLY` targeted session does not auto-enroll unrelated players
 - a `TARGET_PLAYERS_ON_JOIN` session re-adds configured targets when they rejoin
-- auto-record for a named offline player waits and starts on join
+- auto-record for named offline players waits and starts when at least one target joins
+- auto-record for multiple named players starts with online targets and later enrolls offline targets on join
 - auto-record `all` does not create a blank segment when the server is empty
 - an active segment may complete after all tracked players leave, but no replacement starts until a target is present
 - rollover at 30 minutes creates the next segment and keeps recording active
@@ -603,6 +611,9 @@ The feature needs regression coverage before implementation is considered comple
 - `/replay start <name> all [seconds]` uses `replay.start.all`
 - `/replay start <name> all [seconds]` rejects duplicate names
 - `/replay addplayer <recording> <players...>` reports per-player results
+- `/replay autorecord start <players...> [minutes] [prefix]` accepts multiple named targets
+- `/replay autorecord start all Steve` is rejected because `all` is exclusive
+- `/replay autorecord start Steve Alex 20 suspects` parses `Steve` and `Alex` as targets, `20` as minutes, and `suspects` as prefix
 - `/replay autorecord status` reports waiting and active states
 - tab completion suggests `all` where appropriate
 
