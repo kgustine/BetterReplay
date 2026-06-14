@@ -11,7 +11,8 @@ This document is the high-level map for the current codebase. For binary archive
 | Bootstrap | Starts PacketEvents, FoliaLib, config, storage, commands, API, retention, and benchmark services | [Replay.java](../src/main/java/me/justindevb/replay/Replay.java) |
 | Command surface | Dispatches `/replay` subcommands and routes hidden admin tools | [ReplayCommand.java](../src/main/java/me/justindevb/replay/ReplayCommand.java) |
 | Public API | Stable API entry point for integrations and plugins | [ReplayAPI.java](../src/main/java/me/justindevb/replay/api/ReplayAPI.java), [ReplayManager.java](../src/main/java/me/justindevb/replay/api/ReplayManager.java) |
-| Recording coordination | Starts, tracks, stops, and recovers recording sessions | [RecorderManager.java](../src/main/java/me/justindevb/replay/RecorderManager.java), [RecordingSession.java](../src/main/java/me/justindevb/replay/RecordingSession.java) |
+| Recording coordination | Starts, tracks, dynamically enrolls, stops, and recovers recording sessions | [RecorderManager.java](../src/main/java/me/justindevb/replay/RecorderManager.java), [RecordingSession.java](../src/main/java/me/justindevb/replay/RecordingSession.java) |
+| Rolling auto-record | Coordinates persisted rolling all-player or targeted recording segments | [AutoRecordController.java](../src/main/java/me/justindevb/replay/AutoRecordController.java) |
 | Replay session lifecycle | Drives a single viewer's playback session, UI, state safety, and teardown | [ReplaySession.java](../src/main/java/me/justindevb/replay/ReplaySession.java), [ReplayViewerStateManager.java](../src/main/java/me/justindevb/replay/playback/ReplayViewerStateManager.java), [ReplayInventoryUI.java](../src/main/java/me/justindevb/replay/playback/ReplayInventoryUI.java) |
 | Playback engine | Applies timeline events, entity updates, block state changes, and chunk overlays | [PlaybackEngine.java](../src/main/java/me/justindevb/replay/playback/PlaybackEngine.java), [ReplayBlockManager.java](../src/main/java/me/justindevb/replay/playback/ReplayBlockManager.java) |
 | Storage | Persists and loads replays from file or MySQL, with format detection and codec abstractions | [ReplayStorage.java](../src/main/java/me/justindevb/replay/storage/ReplayStorage.java), [FileReplayStorage.java](../src/main/java/me/justindevb/replay/storage/FileReplayStorage.java), [MySQLReplayStorage.java](../src/main/java/me/justindevb/replay/storage/MySQLReplayStorage.java), [ReplayStorageCodec.java](../src/main/java/me/justindevb/replay/storage/ReplayStorageCodec.java), [ReplayFormatDetector.java](../src/main/java/me/justindevb/replay/storage/ReplayFormatDetector.java) |
@@ -24,7 +25,7 @@ When Paper loads the plugin, [Replay.java](../src/main/java/me/justindevb/replay
 
 1. `onLoad()` initializes PacketEvents and registers the packet listener at low priority.
 2. `onEnable()` initializes PacketEvents, prewarms chunk registries needed by PacketEvents chunk playback, and creates the FoliaLib scheduler wrapper.
-3. The plugin constructs the recorder manager and API manager implementation.
+3. The plugin constructs the recorder manager, auto-record controller, and API manager implementation.
 4. Typed configuration is initialized through `ReplayConfigManager`.
 5. Viewer state protection is registered as a Bukkit listener.
 6. The `/replay` command tree is wired, including export, debug, and benchmark handlers.
@@ -33,6 +34,7 @@ When Paper loads the plugin, [Replay.java](../src/main/java/me/justindevb/replay
 9. Retention is started from the configured policy.
 10. Pending append logs are recovered so crash-interrupted recordings can still be finalized on startup.
 11. BetterReplay registers `vv:proxy_details` and stores ViaVersion proxy-reported client protocol versions for replay skin metadata, falling back to PacketEvents when no valid detail message arrives.
+12. Persisted auto-record state or startup auto-record config is resolved after recovery.
 
 The shutdown path mirrors this: active recordings are closed without finalizing or deleting temp logs so the next startup can recover them, active replay sessions are stopped, retention is stopped, PacketEvents is terminated, and MySQL resources are closed.
 
@@ -54,6 +56,17 @@ Important recording characteristics:
 - New binary archives compress finalized timeline and chunk payloads with Zstd level 1; older LZ4 payloads remain readable through manifest metadata or frame magic detection.
 - Legacy JSON replays can still be read during the migration window, but new saves are finalized as `.br` archives.
 - If the server crashes or restarts while recording, startup recovery can resume and finalize orphaned append logs instead of silently losing them.
+- Targeted recordings re-add configured players when they rejoin; all-player recordings add future joiners.
+- Late-added players begin with a current move, equipment, and inventory baseline. Chunk baselines are picked up on the next configured chunk capture interval.
+
+## Rolling auto-record
+
+`AutoRecordController` owns rolling segment policy rather than embedding it in `RecordingSession`.
+
+- It starts segments only when at least one eligible target is online.
+- It waits when an all-player target has no online players or when all named targets are offline.
+- It stops and saves the active segment at the configured duration, then starts the next segment if a target is available.
+- Command-started state is persisted to `auto-record-state.yml` in the plugin data folder and restored after append-log recovery on startup.
 
 ## Playback pipeline
 

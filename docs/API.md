@@ -12,8 +12,13 @@ BetterReplay exposes a public API that other plugins can use to start/stop recor
   - [Gradle (Groovy DSL)](#gradle-groovy-dsl)
   - [Gradle (Kotlin DSL)](#gradle-kotlin-dsl)
 - [Replay Export Queries](#replay-export-queries)
-- [ReplayManager Methods](#replaymanager-methods)
+  - [ReplayManager Methods](#replaymanager-methods)
   - [startRecording](#startrecording)
+  - [startRecordingAll](#startrecordingall)
+  - [addPlayerToRecording](#addplayertorecording)
+  - [startAutoRecording](#startautorecording)
+  - [stopAutoRecording](#stopautorecording)
+  - [getAutoRecordingStatus](#getautorecordingstatus)
   - [stopRecording](#stoprecording)
   - [getActiveRecordings](#getactiverecordings)
   - [startReplay](#startreplay)
@@ -181,6 +186,97 @@ manager.startRecording("pvp-match-42", targets, 300);
 ```java
 // Record a single player indefinitely until manually stopped
 manager.startRecording("surveillance", List.of(suspect), -1);
+```
+
+Targeted recordings re-add configured players if they disconnect and rejoin before the recording stops.
+
+---
+
+### startRecordingAll
+
+Starts an all-player recording. If no players are online, the recording name is reserved and recording begins when the first player joins.
+
+```java
+boolean startRecordingAll(String name, int durationSeconds)
+```
+
+**Example:**
+
+```java
+ReplayManager manager = ReplayAPI.get();
+manager.startRecordingAll("server-event", 3600);
+```
+
+---
+
+### addPlayerToRecording
+
+Adds an online player to an active recording and enrolls that player for rejoin capture when the recording target is player-based.
+
+```java
+RecordingPlayerAddResult addPlayerToRecording(String recordingName, Player player)
+Map<UUID, RecordingPlayerAddResult> addPlayersToRecording(String recordingName, Collection<Player> players)
+```
+
+**Example:**
+
+```java
+RecordingPlayerAddResult result = manager.addPlayerToRecording("incident-42", player);
+if (result == RecordingPlayerAddResult.ADDED) {
+    player.sendMessage("You are now part of the replay recording.");
+}
+```
+
+---
+
+### startAutoRecording
+
+Starts rolling auto-record segments for all players or one or more named player UUIDs.
+
+```java
+boolean startAutoRecording(String namePrefix, RecordingTarget target, int segmentDurationSeconds)
+```
+
+**Example:**
+
+```java
+ReplayManager manager = ReplayAPI.get();
+manager.startAutoRecording("auto", new RecordingTarget.AllPlayers(), 30 * 60);
+
+manager.startAutoRecording(
+        "suspects",
+        new RecordingTarget.Players(Set.of(playerOne.getUniqueId(), playerTwo.getUniqueId())),
+        20 * 60);
+```
+
+Command-started auto-record state is persisted by BetterReplay. API callers should treat this as controller policy, not as a live `RecordingSession` object.
+
+---
+
+### stopAutoRecording
+
+Stops rolling auto-record and optionally saves the active segment.
+
+```java
+boolean stopAutoRecording(boolean saveActiveSegment)
+```
+
+---
+
+### getAutoRecordingStatus
+
+Returns the current rolling auto-record status when enabled.
+
+```java
+Optional<AutoRecordingStatus> getAutoRecordingStatus()
+```
+
+**Example:**
+
+```java
+manager.getAutoRecordingStatus().ifPresent(status -> {
+    getLogger().info("Auto-record target: " + status.targetDescription());
+});
 ```
 
 ---

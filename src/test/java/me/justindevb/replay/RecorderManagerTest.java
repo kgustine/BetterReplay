@@ -134,6 +134,38 @@ class RecorderManagerTest {
     }
 
     @Test
+    void enrollJoiningPlayer_readdsTargetedManualRecordingPlayer() {
+        UUID playerUuid = UUID.randomUUID();
+        Player player = mock(Player.class);
+        PlayerInventory inventory = mock(PlayerInventory.class);
+        World world = mock(World.class);
+
+        when(player.getUniqueId()).thenReturn(playerUuid);
+        when(player.isOnline()).thenReturn(true);
+        when(player.getLocation()).thenReturn(new Location(world, 1, 65, 2, 90, 10));
+        when(player.getPose()).thenReturn(Pose.STANDING);
+        when(player.getName()).thenReturn("Steve");
+        when(player.getWorld()).thenReturn(world);
+        when(world.getName()).thenReturn("world");
+        when(player.getInventory()).thenReturn(inventory);
+        when(inventory.getStorageContents()).thenReturn(new ItemStack[36]);
+        when(inventory.getItemInMainHand()).thenReturn(null);
+        when(inventory.getItemInOffHand()).thenReturn(null);
+        when(inventory.getHeldItemSlot()).thenReturn(0);
+
+        WrappedTask mockTask = mock(WrappedTask.class);
+        when(scheduler.runTimer(any(Runnable.class), anyLong(), anyLong())).thenReturn(mockTask);
+
+        assertTrue(manager.startSession("manual", List.of(player), -1));
+        RecordingSession session = manager.getActiveSessions().get("manual");
+        session.getTrackedPlayers().clear();
+
+        manager.enrollJoiningPlayer(player);
+
+        assertTrue(session.isTrackedPlayer(playerUuid));
+    }
+
+    @Test
     void stopSession_existing_returnsTrue() {
         Player p = mock(Player.class);
         when(p.getUniqueId()).thenReturn(UUID.randomUUID());

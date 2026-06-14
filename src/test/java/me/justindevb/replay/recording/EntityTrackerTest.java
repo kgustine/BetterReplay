@@ -57,6 +57,15 @@ class EntityTrackerTest {
     }
 
     @Test
+    void addPlayer_addsNewUuidAndRejectsDuplicate() {
+        UUID addedUuid = UUID.randomUUID();
+
+        assertTrue(tracker.addPlayer(addedUuid));
+        assertTrue(tracker.isTrackedPlayer(addedUuid));
+        assertFalse(tracker.addPlayer(addedUuid));
+    }
+
+    @Test
     void getTrackedPlayers_returnsAll() {
         assertEquals(2, tracker.getTrackedPlayers().size());
         assertTrue(tracker.getTrackedPlayers().contains(uuid1));

@@ -1,6 +1,8 @@
 package me.justindevb.replay;
 
 import me.justindevb.replay.api.ReplayManager;
+import me.justindevb.replay.api.RecordingPlayerAddResult;
+import me.justindevb.replay.api.RecordingTarget;
 import me.justindevb.replay.benchmark.ReplayBenchmarkCommand;
 import me.justindevb.replay.config.ReplayConfigReloadResult;
 import me.justindevb.replay.config.ReplayConfigSetting;
@@ -15,6 +17,7 @@ import me.justindevb.replay.velocity.ReplayTransferManager;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.serializer.legacy.LegacyComponentSerializer;
 import org.bukkit.Bukkit;
+import org.bukkit.OfflinePlayer;
 import org.bukkit.command.Command;
 import org.bukkit.entity.Player;
 import org.junit.jupiter.api.BeforeEach;
@@ -179,9 +182,8 @@ class ReplayCommandTest {
 
         @Test
         void missingArgs_showsUsage() {
-            when(player.hasPermission("replay.start")).thenReturn(true);
             replayCommand.onCommand(player, command, "replay", new String[]{"start", "test"});
-            verify(player).sendMessage("§cUsage: /replay start <name> <player1 player2 ...> [durationSeconds]");
+            verify(player).sendMessage("§cUsage: /replay start <name> <player1 player2 ...|all> [durationSeconds]");
         }
 
         @Test
@@ -254,6 +256,93 @@ class ReplayCommandTest {
                         new String[]{"start", "dup", "Steve"});
 
                 verify(player).sendMessage("§cSession with that name already exists!");
+            }
+        }
+
+        @Test
+        void startAllWithNoPlayers_queuesRecording() {
+            when(player.hasPermission("replay.start.all")).thenReturn(true);
+            when(replayManager.startRecordingAll("serverwide", -1)).thenReturn(true);
+
+            try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class)) {
+                bukkit.when(Bukkit::getOnlinePlayers).thenReturn(List.of());
+
+                replayCommand.onCommand(player, command, "replay", new String[]{"start", "serverwide", "all"});
+
+                verify(replayManager).startRecordingAll("serverwide", -1);
+                verify(player).sendMessage("§aRecording session queued until a player joins: serverwide");
+            }
+        }
+
+        @Test
+        void startAllRejectsMixedTargets() {
+            when(player.hasPermission("replay.start.all")).thenReturn(true);
+
+            replayCommand.onCommand(player, command, "replay", new String[]{"start", "serverwide", "all", "Steve"});
+
+            verify(player).sendMessage("§cUsage: /replay start <name> all [durationSeconds]");
+            verify(replayManager, never()).startRecordingAll(anyString(), anyInt());
+        }
+    }
+
+    @Nested
+    class AddPlayer {
+        @Test
+        void addPlayer_reportsResult() {
+            when(player.hasPermission("replay.addplayer")).thenReturn(true);
+            Player target = mock(Player.class);
+            when(replayManager.addPlayerToRecording("incident", target)).thenReturn(RecordingPlayerAddResult.ADDED);
+
+            try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class)) {
+                bukkit.when(() -> Bukkit.getPlayerExact("Alex")).thenReturn(target);
+
+                replayCommand.onCommand(player, command, "replay", new String[]{"addplayer", "incident", "Alex"});
+
+                verify(replayManager).addPlayerToRecording("incident", target);
+                verify(player).sendMessage("§aAdded player to recording: Alex");
+            }
+        }
+    }
+
+    @Nested
+    class AutoRecord {
+        @Test
+        void startWithNumericPlayerName_treatsNumberAsTarget() {
+            when(player.hasPermission("replay.autorecord")).thenReturn(true);
+            UUID numericUuid = UUID.randomUUID();
+            OfflinePlayer offlinePlayer = mock(OfflinePlayer.class);
+            when(offlinePlayer.getUniqueId()).thenReturn(numericUuid);
+
+            try (MockedStatic<Replay> replay = mockStatic(Replay.class);
+                 MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class)) {
+                Replay plugin = immediateReplayPlugin();
+                replay.when(Replay::getInstance).thenReturn(plugin);
+                bukkit.when(() -> Bukkit.getPlayerExact("12345")).thenReturn(null);
+                bukkit.when(() -> Bukkit.getOfflinePlayer("12345")).thenReturn(offlinePlayer);
+                when(replayManager.startAutoRecording(eq("auto"), argThat(target ->
+                        target instanceof RecordingTarget.Players players
+                                && players.playerUuids().contains(numericUuid)), eq(20 * 60))).thenReturn(true);
+
+                replayCommand.onCommand(player, command, "replay",
+                        new String[]{"autorecord", "start", "12345", "--minutes", "20"});
+
+                verify(player).sendMessage("§aStarted auto-record.");
+            }
+        }
+
+        @Test
+        void startRejectsAllMixedWithPlayerName() {
+            when(player.hasPermission("replay.autorecord")).thenReturn(true);
+
+            try (MockedStatic<Replay> replay = mockStatic(Replay.class)) {
+                Replay plugin = immediateReplayPlugin();
+                replay.when(Replay::getInstance).thenReturn(plugin);
+
+                replayCommand.onCommand(player, command, "replay",
+                        new String[]{"autorecord", "start", "all", "Steve"});
+
+                verify(player).sendMessage("§cThe all target cannot be combined with player names.");
+                verify(replayManager, never()).startAutoRecording(anyString(), any(), anyInt());
             }
         }
     }
@@ -561,6 +650,8 @@ class ReplayCommandTest {
         void firstArg_showsAvailableSubcommands() {
             when(player.hasPermission("replay.start")).thenReturn(true);
             when(player.hasPermission("replay.stop")).thenReturn(true);
+            when(player.hasPermission("replay.addplayer")).thenReturn(false);
+            when(player.hasPermission("replay.autorecord")).thenReturn(false);
             when(player.hasPermission("replay.play")).thenReturn(false);
             when(player.hasPermission("replay.delete")).thenReturn(false);
             when(player.hasPermission("replay.list")).thenReturn(false);
@@ -609,6 +700,8 @@ class ReplayCommandTest {
         void firstArg_filtersPrefix() {
             when(player.hasPermission("replay.start")).thenReturn(true);
             when(player.hasPermission("replay.stop")).thenReturn(true);
+            when(player.hasPermission("replay.addplayer")).thenReturn(false);
+            when(player.hasPermission("replay.autorecord")).thenReturn(false);
             when(player.hasPermission("replay.play")).thenReturn(true);
             when(player.hasPermission("replay.delete")).thenReturn(true);
             when(player.hasPermission("replay.list")).thenReturn(true);
@@ -725,6 +818,9 @@ class ReplayCommandTest {
     @Test
     void help_includesReloadWhenPermitted() {
         when(player.hasPermission("replay.start")).thenReturn(false);
+        when(player.hasPermission("replay.start.all")).thenReturn(false);
+        when(player.hasPermission("replay.addplayer")).thenReturn(false);
+        when(player.hasPermission("replay.autorecord")).thenReturn(false);
         when(player.hasPermission("replay.stop")).thenReturn(false);
         when(player.hasPermission("replay.play")).thenReturn(false);
         when(player.hasPermission("replay.list")).thenReturn(false);

@@ -32,6 +32,10 @@ public class EntityTracker {
         return trackedPlayers.contains(uuid);
     }
 
+    public boolean addPlayer(UUID uuid) {
+        return trackedPlayers.add(uuid);
+    }
+
     public Set<UUID> getTrackedPlayers() {
         return trackedPlayers;
     }

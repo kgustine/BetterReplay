@@ -54,6 +54,7 @@ public class Replay extends JavaPlugin {
     private MySQLConnectionManager connectionManager;
     private ReplayCache replayCache;
     private ReplayManagerImpl manager;
+    private AutoRecordController autoRecordController;
     private FoliaLib foliaLib;
     private ReplayBenchmarkService replayBenchmarkService;
     private ReplayRetentionService replayRetentionService;
@@ -79,9 +80,12 @@ public class Replay extends JavaPlugin {
         foliaLib = new FoliaLib(this);
 
         recorderManager = new RecorderManager(this);
-        manager = new ReplayManagerImpl(this, recorderManager);
+        autoRecordController = new AutoRecordController(this, recorderManager);
+        recorderManager.setAutoRecordController(autoRecordController);
+        manager = new ReplayManagerImpl(this, recorderManager, autoRecordController);
         initConfig();
         messages = new ReplayMessagesConfig(this);
+        getServer().getPluginManager().registerEvents(recorderManager, this);
         replayViewerStateManager = new ReplayViewerStateManager(this);
         getServer().getPluginManager().registerEvents(replayViewerStateManager, this);
         replayBenchmarkService = createReplayBenchmarkService();
@@ -101,7 +105,8 @@ public class Replay extends JavaPlugin {
 
         initStorage();
         initRetention();
-        recorderManager.recoverPendingAppendLogs();
+        recorderManager.recoverPendingAppendLogs()
+                .thenRun(() -> foliaLib.getScheduler().runNextTick(task -> autoRecordController.restorePersistedOrConfiguredStartup()));
 
         initVelocityLogic();
         initViaVersionProxyDetails();
@@ -115,6 +120,9 @@ public class Replay extends JavaPlugin {
 
     @Override
     public void onDisable() {
+        if (autoRecordController != null) {
+            autoRecordController.shutdown();
+        }
         recorderManager.shutdown();
 
         for (ReplaySession session : ReplayRegistry.getActiveSessions()) {

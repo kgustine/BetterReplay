@@ -2,6 +2,9 @@ package me.justindevb.replay;
 
 import me.justindevb.replay.api.ReplayExportQuery;
 import me.justindevb.replay.api.ReplayManager;
+import me.justindevb.replay.api.AutoRecordingStatus;
+import me.justindevb.replay.api.RecordingPlayerAddResult;
+import me.justindevb.replay.api.RecordingTarget;
 import me.justindevb.replay.storage.ReplayDeleteResult;
 import me.justindevb.replay.storage.ReplayProtectionResult;
 import me.justindevb.replay.storage.ReplaySummary;
@@ -16,8 +19,11 @@ import org.bukkit.entity.Player;
 import java.io.File;
 import java.time.Instant;
 import java.util.Collection;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.logging.Level;
 
@@ -27,10 +33,16 @@ public class ReplayManagerImpl implements ReplayManager {
 
     private final Replay replay;
     private final RecorderManager recorderManager;
+    private final AutoRecordController autoRecordController;
 
     public ReplayManagerImpl(Replay replay, RecorderManager recorderManager) {
+        this(replay, recorderManager, null);
+    }
+
+    public ReplayManagerImpl(Replay replay, RecorderManager recorderManager, AutoRecordController autoRecordController) {
         this.replay = replay;
         this.recorderManager = recorderManager;
+        this.autoRecordController = autoRecordController;
     }
 
     @Override
@@ -39,6 +51,42 @@ public class ReplayManagerImpl implements ReplayManager {
             return false;
         }
         return recorderManager.startSession(name, players, durationSeconds);
+    }
+
+    @Override
+    public boolean startRecordingAll(String name, int durationSeconds) {
+        return recorderManager.startAllPlayersSession(name, durationSeconds);
+    }
+
+    @Override
+    public RecordingPlayerAddResult addPlayerToRecording(String recordingName, Player player) {
+        return recorderManager.addPlayerToSession(recordingName, player);
+    }
+
+    @Override
+    public Map<UUID, RecordingPlayerAddResult> addPlayersToRecording(String recordingName, Collection<Player> players) {
+        Map<UUID, RecordingPlayerAddResult> results = new LinkedHashMap<>();
+        for (Player player : players) {
+            UUID uuid = player != null ? player.getUniqueId() : new UUID(0L, 0L);
+            results.put(uuid, addPlayerToRecording(recordingName, player));
+        }
+        return results;
+    }
+
+    @Override
+    public boolean startAutoRecording(String namePrefix, RecordingTarget target, int segmentDurationSeconds) {
+        return autoRecordController != null
+                && autoRecordController.start(target, segmentDurationSeconds, namePrefix, true);
+    }
+
+    @Override
+    public boolean stopAutoRecording(boolean saveActiveSegment) {
+        return autoRecordController != null && autoRecordController.stop(saveActiveSegment, true);
+    }
+
+    @Override
+    public Optional<AutoRecordingStatus> getAutoRecordingStatus() {
+        return autoRecordController == null ? Optional.empty() : autoRecordController.status();
     }
 
     @Override
@@ -68,7 +116,9 @@ public class ReplayManagerImpl implements ReplayManager {
 
     @Override
     public Collection<String> getActiveRecordings() {
-        return recorderManager.getActiveSessions().keySet();
+        List<String> names = new java.util.ArrayList<>(recorderManager.getActiveSessions().keySet());
+        names.addAll(recorderManager.getPendingRecordingNames());
+        return names;
     }
 
     @Override

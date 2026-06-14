@@ -25,6 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 2026-06-04: Expanded bStats telemetry with SimplePie charts for storage type, recording chunk capture, playback viewer safety and chunk playback settings, vanish-viewer, and retention state plus retention age normalization to days when cleanup is disabled
 - 2026-06-12: Velocity replay handoff support via `/replay play <name> server:<backend>`, including remote replay launch and return-to-origin flow after playback stops
 - 2026-06-14: Config key `Velocity.Default-Replay-Server` to route `/replay play <name>` to a default Velocity replay backend when no `server:<backend>` argument is supplied
+- 2026-06-14: Dynamic recording enrollment, `/replay addplayer`, all-player recordings, and persisted rolling `/replay autorecord` sessions for named players or `all`
 
 ### Changed
 - 2026-08-24: Updated PacketEvents to `2.13.0` and restored replay player skin metadata dispatch
@@ -39,6 +40,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 2026-05-14: Modrinth uploads now publish the matching release changelog on `main` and the `[Unreleased]` section for `dev` alpha builds
 - 2026-06-04: README content was reorganized into overview sections with dedicated Architecture, Configuration, and Commands documents under `docs/`
 - 2026-06-23: New binary `.br` archives now compress timeline payloads and chunk payloads with Zstd level 1, declare `payloadCompression: "zstd"`, bump the binary replay compatibility floor to `1.5.0-alpha.12`, and keep LZ4 replay/chunk archives readable through metadata or frame-magic compatibility fallback
+- 2026-06-??: Targeted `/replay start <name> <players...>` recordings now re-add configured players when they rejoin before the recording stops
 
 ### Removed
 - 2026-04-28: `General.Enable-Benchmark-Command`; `/replay benchmark` is now always permission-gated through `replay.benchmark`

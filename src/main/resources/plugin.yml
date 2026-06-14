@@ -15,6 +15,9 @@ permissions:
     description: Gives access to all replay commands
     children:
       replay.start: true
+      replay.start.all: true
+      replay.addplayer: true
+      replay.autorecord: true
       replay.stop: true
       replay.list: true
       replay.delete: true
@@ -27,6 +30,15 @@ permissions:
       replay.reload: true
   replay.start:
     description: Allows starting a new recording
+    default: op
+  replay.start.all:
+    description: Allows starting an all-player recording
+    default: op
+  replay.addplayer:
+    description: Allows adding players to active recordings
+    default: op
+  replay.autorecord:
+    description: Allows managing rolling auto-record
     default: op
   replay.stop:
     description: Allows stopping an active recording

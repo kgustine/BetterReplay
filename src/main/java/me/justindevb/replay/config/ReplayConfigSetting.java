@@ -3,7 +3,7 @@ package me.justindevb.replay.config;
 import org.bukkit.configuration.file.FileConfiguration;
 
 public enum ReplayConfigSetting {
-        CONFIG_VERSION("Config-Version", 8, ReplayConfigReloadScope.INTERNAL,
+        CONFIG_VERSION("Config-Version", 9, ReplayConfigReloadScope.INTERNAL,
             "Internal config migration version. Do not edit unless instructed."),
     CHECK_UPDATE("General.Check-Update", true, ReplayConfigReloadScope.FUTURE_ONLY,
             "Check for plugin updates on startup."),
@@ -30,6 +30,18 @@ public enum ReplayConfigSetting {
             "How often the recording recomputes the tracked chunk-interest window."),
     CHUNK_CAPTURE_MAX_UNIQUE_CHUNKS("Recording.Chunk-Capture.Max-Unique-Chunks-Per-Recording", 20000, ReplayConfigReloadScope.NEW_SESSIONS_ONLY,
             "Maximum number of unique chunks captured in one recording before truncation."),
+    AUTO_RECORD_ON_STARTUP("Recording.Auto-Record.Record-On-Startup", false, ReplayConfigReloadScope.FUTURE_ONLY,
+            "Start rolling auto-record when the plugin starts, unless persisted runtime state overrides it."),
+    AUTO_RECORD_STARTUP_TARGET("Recording.Auto-Record.Startup-Target", "all", ReplayConfigReloadScope.FUTURE_ONLY,
+            "Startup auto-record target: all or one player name."),
+    AUTO_RECORD_SEGMENT_DURATION_MINUTES("Recording.Auto-Record.Segment-Duration-Minutes", 30, ReplayConfigReloadScope.NEW_SESSIONS_ONLY,
+            "Default rolling auto-record segment duration in minutes."),
+    AUTO_RECORD_NAME_PREFIX("Recording.Auto-Record.Name-Prefix", "auto", ReplayConfigReloadScope.NEW_SESSIONS_ONLY,
+            "Default prefix for generated rolling auto-record replay names."),
+    AUTO_RECORD_SAVE_ACTIVE_SEGMENT_ON_SHUTDOWN("Recording.Auto-Record.Save-Active-Segment-On-Shutdown", true, ReplayConfigReloadScope.IMMEDIATE,
+            "Save the active rolling auto-record segment during graceful plugin shutdown."),
+    AUTO_RECORD_NAME_TIMEZONE("Recording.Auto-Record.Name-Timezone", "UTC", ReplayConfigReloadScope.NEW_SESSIONS_ONLY,
+            "Time zone used in generated rolling auto-record replay names."),
     PLAYBACK_SPEED_STEP("Playback.Speed-Step", 0.2, ReplayConfigReloadScope.NEW_SESSIONS_ONLY,
             "Speed change increment per Faster/Slower click (e.g. 0.2 = 20%)."),
     PLAYBACK_MAX_SPEED("Playback.Max-Speed", 1.0, ReplayConfigReloadScope.NEW_SESSIONS_ONLY,

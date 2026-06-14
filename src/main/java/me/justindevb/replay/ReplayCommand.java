@@ -1,6 +1,9 @@
 package me.justindevb.replay;
 
 import me.justindevb.replay.api.ReplayManager;
+import me.justindevb.replay.api.AutoRecordingStatus;
+import me.justindevb.replay.api.RecordingPlayerAddResult;
+import me.justindevb.replay.api.RecordingTarget;
 import me.justindevb.replay.benchmark.ReplayBenchmarkCommand;
 import me.justindevb.replay.config.ReplayConfigReloadResult;
 import me.justindevb.replay.config.ReplayConfigSetting;
@@ -18,12 +21,14 @@ import org.bukkit.command.Command;
 import org.bukkit.command.CommandExecutor;
 import org.bukkit.command.CommandSender;
 import org.bukkit.command.TabCompleter;
+import org.bukkit.OfflinePlayer;
 import org.bukkit.entity.Player;
 
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.Optional;
 import java.util.stream.Collectors;
 import java.util.logging.Level;
 
@@ -72,6 +77,16 @@ public class ReplayCommand implements CommandExecutor, TabCompleter {
 
         String subcommand = args[0].toLowerCase();
 
+        if (subcommand.equals("start")) {
+            return handleStart(sender, args);
+        }
+        if (subcommand.equals("addplayer")) {
+            return handleAddPlayer(sender, args);
+        }
+        if (subcommand.equals("autorecord")) {
+            return handleAutoRecord(sender, args);
+        }
+
         if (!(sender instanceof Player p)) {
             return switch (subcommand) {
                 case "protect" -> handleProtect(sender, args, "console");
@@ -85,55 +100,6 @@ public class ReplayCommand implements CommandExecutor, TabCompleter {
         }
 
         switch (subcommand) {
-            case "start" -> {
-                if (!p.hasPermission("replay.start")) {
-                    p.sendMessage("You do not have permission");
-                    return true;
-                }
-                if (args.length < 3) {
-                    p.sendMessage("§cUsage: /replay start <name> <player1 player2 ...> [durationSeconds]");
-                    return true;
-                }
-
-                String sessionName = args[1];
-                java.util.Optional<String> invalidSessionName = ReplayNames.validateRecordingName(sessionName);
-                if (invalidSessionName.isPresent()) {
-                    p.sendMessage("§c" + invalidSessionName.get());
-                    return true;
-                }
-                int duration = -1;
-
-                try {
-                    duration = Integer.parseInt(args[args.length - 1]);
-                } catch (NumberFormatException ignored) {}
-
-                int endIndex = (duration != -1 ? args.length - 1 : args.length);
-
-                String[] playerNames = new String[endIndex - 2];
-                System.arraycopy(args, 2, playerNames, 0, endIndex - 2);
-
-                List<Player> targets = new ArrayList<>();
-                for (String pn : playerNames) {
-                    Player target = Bukkit.getPlayerExact(pn);
-                    if (target != null) {
-                        targets.add(target);
-                    } else {
-                        ReplayMessages.send(p, "§cPlayer not found: " + pn);
-                    }
-                }
-
-                if (targets.isEmpty()) {
-                    p.sendMessage("§cNo valid players to record.");
-                    return true;
-                }
-
-                if (replayManager.startRecording(sessionName, targets, duration)) {
-                    ReplayMessages.send(p, "§aStarted recording session: " + sessionName + " ("
-                            + (duration == -1 ? "∞" : duration + "s") + ")");
-                } else {
-                    p.sendMessage("§cSession with that name already exists!");
-                }
-            }
             case "stop" -> {
                 if (!p.hasPermission("replay.stop")) {
                     p.sendMessage("You do not have permission");
@@ -414,6 +380,12 @@ public class ReplayCommand implements CommandExecutor, TabCompleter {
         p.sendMessage("§6§lBetterReplay Commands:");
         if (p.hasPermission("replay.start"))
             p.sendMessage("§e/replay start <name> <player1 player2 ...> [seconds] §7- Start recording");
+        if (p.hasPermission("replay.start.all"))
+            p.sendMessage("§e/replay start <name> all [seconds] §7- Record all players");
+        if (p.hasPermission("replay.addplayer"))
+            p.sendMessage("§e/replay addplayer <recording> <players...> §7- Add players to an active recording");
+        if (p.hasPermission("replay.autorecord"))
+            p.sendMessage("§e/replay autorecord start <players...|all> [--minutes <minutes>] [--prefix <prefix>] §7- Start rolling auto-record");
         if (p.hasPermission("replay.stop")) {
             p.sendMessage("§e/replay stop <name> §7- Stop an active recording");
             var sessions = replayManager.getActiveRecordings();
@@ -454,6 +426,8 @@ public class ReplayCommand implements CommandExecutor, TabCompleter {
             List<String> completions = new ArrayList<>();
 
             if (sender.hasPermission("replay.start")) completions.add("start");
+            if (sender.hasPermission("replay.addplayer")) completions.add("addplayer");
+            if (sender.hasPermission("replay.autorecord")) completions.add("autorecord");
             if (sender.hasPermission("replay.stop")) completions.add("stop");
             if (sender.hasPermission("replay.play")) completions.add("play");
             if (sender.hasPermission("replay.delete")) completions.add("delete");
@@ -509,16 +483,20 @@ public class ReplayCommand implements CommandExecutor, TabCompleter {
         }
 
         if (args.length == 3 && args[0].equalsIgnoreCase("start")) {
-            if (!sender.hasPermission("replay.start"))
+            if (!sender.hasPermission("replay.start") && !sender.hasPermission("replay.start.all"))
                 return Collections.emptyList();
 
             // First player slot — only suggest player names, no duration yet
             String currentArg = args[2].toLowerCase();
 
-            return Bukkit.getOnlinePlayers().stream()
+            List<String> suggestions = Bukkit.getOnlinePlayers().stream()
                     .map(Player::getName)
                     .filter(name -> name.toLowerCase().startsWith(currentArg))
-                    .toList();
+                    .collect(java.util.stream.Collectors.toCollection(ArrayList::new));
+            if ("all".startsWith(currentArg)) {
+                suggestions.add("all");
+            }
+            return suggestions;
         }
 
         if (args.length >= 4 && args[0].equalsIgnoreCase("start")) {
@@ -547,7 +525,264 @@ public class ReplayCommand implements CommandExecutor, TabCompleter {
             return suggestions;
         }
 
+        if (args.length >= 2 && args[0].equalsIgnoreCase("addplayer")) {
+            if (!sender.hasPermission("replay.addplayer"))
+                return Collections.emptyList();
+            if (args.length == 2) {
+                return replayManager.getActiveRecordings().stream()
+                        .filter(name -> name.toLowerCase().startsWith(args[1].toLowerCase()))
+                        .toList();
+            }
+            String currentArg = args[args.length - 1].toLowerCase();
+            return Bukkit.getOnlinePlayers().stream()
+                    .map(Player::getName)
+                    .filter(name -> name.toLowerCase().startsWith(currentArg))
+                    .toList();
+        }
+
+        if (args.length >= 2 && args[0].equalsIgnoreCase("autorecord")) {
+            if (!sender.hasPermission("replay.autorecord"))
+                return Collections.emptyList();
+            if (args.length == 2) {
+                return List.of("start", "stop", "status").stream()
+                        .filter(value -> value.startsWith(args[1].toLowerCase()))
+                        .toList();
+            }
+            if (args.length >= 3 && args[1].equalsIgnoreCase("start")) {
+                String currentArg = args[args.length - 1].toLowerCase();
+                List<String> suggestions = Bukkit.getOnlinePlayers().stream()
+                        .map(Player::getName)
+                        .filter(name -> name.toLowerCase().startsWith(currentArg))
+                        .collect(java.util.stream.Collectors.toCollection(ArrayList::new));
+                if ("all".startsWith(currentArg)) suggestions.add("all");
+                if ("--minutes".startsWith(currentArg)) suggestions.add("--minutes");
+                if ("--prefix".startsWith(currentArg)) suggestions.add("--prefix");
+                return suggestions;
+            }
+        }
+
         return Collections.emptyList();
+    }
+
+    private boolean handleStart(CommandSender sender, String[] args) {
+        if (args.length < 3) {
+            sender.sendMessage("§cUsage: /replay start <name> <player1 player2 ...|all> [durationSeconds]");
+            return true;
+        }
+
+        String sessionName = args[1];
+        if (args[2].equalsIgnoreCase("all")) {
+            if (!sender.hasPermission("replay.start.all")) {
+                sender.sendMessage("You do not have permission");
+                return true;
+            }
+            if (args.length > 4) {
+                sender.sendMessage("§cUsage: /replay start <name> all [durationSeconds]");
+                return true;
+            }
+            int duration = -1;
+            if (args.length == 4) {
+                try {
+                    duration = Integer.parseInt(args[3]);
+                } catch (NumberFormatException e) {
+                    sender.sendMessage("§cUsage: /replay start <name> all [durationSeconds]");
+                    return true;
+                }
+            }
+            boolean waiting = Bukkit.getOnlinePlayers().isEmpty();
+            if (replayManager.startRecordingAll(sessionName, duration)) {
+                sender.sendMessage(waiting
+                        ? "§aRecording session queued until a player joins: " + sessionName
+                        : "§aStarted recording session: " + sessionName + " (" + (duration == -1 ? "∞" : duration + "s") + ")");
+            } else {
+                sender.sendMessage("§cSession with that name already exists!");
+            }
+            return true;
+        }
+
+        if (!(sender instanceof Player)) {
+            sender.sendMessage("Must be a player to execute this command");
+            return true;
+        }
+        if (!sender.hasPermission("replay.start")) {
+            sender.sendMessage("You do not have permission");
+            return true;
+        }
+
+        int duration = parseOptionalTrailingInt(args, 2);
+        int endIndex = duration != -1 ? args.length - 1 : args.length;
+        List<Player> targets = new ArrayList<>();
+        for (int i = 2; i < endIndex; i++) {
+            Player target = Bukkit.getPlayerExact(args[i]);
+            if (target != null) {
+                targets.add(target);
+            } else {
+                sender.sendMessage("§cPlayer not found: " + args[i]);
+            }
+        }
+        if (targets.isEmpty()) {
+            sender.sendMessage("§cNo valid players to record.");
+            return true;
+        }
+        if (replayManager.startRecording(sessionName, targets, duration)) {
+            sender.sendMessage("§aStarted recording session: " + sessionName + " (" + (duration == -1 ? "∞" : duration + "s") + ")");
+        } else {
+            sender.sendMessage("§cSession with that name already exists!");
+        }
+        return true;
+    }
+
+    private boolean handleAddPlayer(CommandSender sender, String[] args) {
+        if (!sender.hasPermission("replay.addplayer")) {
+            sender.sendMessage("You do not have permission");
+            return true;
+        }
+        if (args.length < 3) {
+            sender.sendMessage("§cUsage: /replay addplayer <recording> <players...>");
+            return true;
+        }
+        String recordingName = args[1];
+        for (int i = 2; i < args.length; i++) {
+            Player target = Bukkit.getPlayerExact(args[i]);
+            if (target == null) {
+                sender.sendMessage("§cPlayer not found: " + args[i]);
+                continue;
+            }
+            RecordingPlayerAddResult result = replayManager.addPlayerToRecording(recordingName, target);
+            sender.sendMessage(formatAddPlayerResult(args[i], result));
+            if (result == RecordingPlayerAddResult.SESSION_NOT_FOUND) {
+                break;
+            }
+        }
+        return true;
+    }
+
+    private boolean handleAutoRecord(CommandSender sender, String[] args) {
+        if (!sender.hasPermission("replay.autorecord")) {
+            sender.sendMessage("You do not have permission");
+            return true;
+        }
+        if (args.length < 2) {
+            sender.sendMessage("§cUsage: /replay autorecord <start|stop|status>");
+            return true;
+        }
+        return switch (args[1].toLowerCase()) {
+            case "start" -> handleAutoRecordStart(sender, args);
+            case "stop" -> {
+                if (replayManager.stopAutoRecording(true)) {
+                    sender.sendMessage("§aStopped auto-record.");
+                } else {
+                    sender.sendMessage("§cAuto-record is not running.");
+                }
+                yield true;
+            }
+            case "status" -> {
+                Optional<AutoRecordingStatus> status = replayManager.getAutoRecordingStatus();
+                if (status.isEmpty()) {
+                    sender.sendMessage("§7Auto-record is disabled.");
+                } else {
+                    AutoRecordingStatus value = status.get();
+                    sender.sendMessage("§aAuto-record enabled: §f" + value.targetDescription());
+                    sender.sendMessage(value.waiting()
+                            ? "§7Waiting for eligible players."
+                            : "§7Active segment: §f" + value.activeSegmentName());
+                }
+                yield true;
+            }
+            default -> {
+                sender.sendMessage("§cUsage: /replay autorecord <start|stop|status>");
+                yield true;
+            }
+        };
+    }
+
+    private boolean handleAutoRecordStart(CommandSender sender, String[] args) {
+        if (args.length < 3) {
+            sender.sendMessage("§cUsage: /replay autorecord start <players...|all> [--minutes <minutes>] [--prefix <prefix>]");
+            return true;
+        }
+        Replay plugin = Replay.getInstance();
+        int minutes = ReplayConfigSetting.AUTO_RECORD_SEGMENT_DURATION_MINUTES.getInt(plugin.getConfig());
+        String prefix = ReplayConfigSetting.AUTO_RECORD_NAME_PREFIX.getString(plugin.getConfig());
+        List<String> targetTokens = new ArrayList<>();
+        for (int i = 2; i < args.length; i++) {
+            String token = args[i];
+            if (token.equalsIgnoreCase("--minutes")) {
+                if (i + 1 >= args.length) {
+                    sender.sendMessage("§cMissing value for --minutes");
+                    return true;
+                }
+                try {
+                    minutes = Integer.parseInt(args[++i]);
+                } catch (NumberFormatException e) {
+                    sender.sendMessage("§cInvalid minutes: " + args[i]);
+                    return true;
+                }
+            } else if (token.equalsIgnoreCase("--prefix")) {
+                if (i + 1 >= args.length) {
+                    sender.sendMessage("§cMissing value for --prefix");
+                    return true;
+                }
+                prefix = args[++i];
+            } else {
+                targetTokens.add(token);
+            }
+        }
+        if (targetTokens.isEmpty()) {
+            sender.sendMessage("§cAt least one target is required.");
+            return true;
+        }
+        if (minutes <= 0) {
+            sender.sendMessage("§cMinutes must be greater than zero.");
+            return true;
+        }
+        RecordingTarget target;
+        if (targetTokens.stream().anyMatch(token -> token.equalsIgnoreCase("all"))) {
+            if (targetTokens.size() != 1) {
+                sender.sendMessage("§cThe all target cannot be combined with player names.");
+                return true;
+            }
+            target = new RecordingTarget.AllPlayers();
+        } else {
+            java.util.Set<java.util.UUID> uuids = new java.util.LinkedHashSet<>();
+            for (String targetName : targetTokens) {
+                Player online = Bukkit.getPlayerExact(targetName);
+                if (online != null) {
+                    uuids.add(online.getUniqueId());
+                } else {
+                    OfflinePlayer offline = Bukkit.getOfflinePlayer(targetName);
+                    uuids.add(offline.getUniqueId());
+                }
+            }
+            target = new RecordingTarget.Players(uuids);
+        }
+        if (replayManager.startAutoRecording(prefix, target, minutes * 60)) {
+            sender.sendMessage("§aStarted auto-record.");
+        } else {
+            sender.sendMessage("§cAuto-record is already running or the request was invalid.");
+        }
+        return true;
+    }
+
+    private int parseOptionalTrailingInt(String[] args, int firstOptionalIndex) {
+        if (args.length <= firstOptionalIndex) {
+            return -1;
+        }
+        try {
+            return Integer.parseInt(args[args.length - 1]);
+        } catch (NumberFormatException ignored) {
+            return -1;
+        }
+    }
+
+    private String formatAddPlayerResult(String name, RecordingPlayerAddResult result) {
+        return switch (result) {
+            case ADDED -> "§aAdded player to recording: " + name;
+            case ALREADY_TRACKED -> "§ePlayer is already tracked: " + name;
+            case SESSION_NOT_FOUND -> "§cNo active session with that name!";
+            case SESSION_STOPPED -> "§cRecording is stopped: " + name;
+            case PLAYER_OFFLINE -> "§cPlayer is offline: " + name;
+        };
     }
 
     private String joinArgs(String[] args, int fromIndex) {

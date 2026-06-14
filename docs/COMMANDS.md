@@ -16,7 +16,12 @@ If a player runs `/replay` with no subcommand, BetterReplay prints a permission-
 
 | Command | Permission | Console | Notes |
 |---|---|---|---|
-| `/replay start <name> <player1 player2 ...> [seconds]` | `replay.start` | No | Starts a new recording. If the final token parses as an integer, it is treated as the duration in seconds. Omit it for an indefinite recording. |
+| `/replay start <name> <player1 player2 ...> [seconds]` | `replay.start` | No | Starts a targeted recording. Targeted players are re-added if they rejoin before the recording stops. If the final token parses as an integer, it is treated as the duration in seconds. |
+| `/replay start <name> all [seconds]` | `replay.start.all` | Yes | Starts an all-player recording. If no players are online, the name is reserved and recording begins when the first player joins. |
+| `/replay addplayer <recording> <player1 player2 ...>` | `replay.addplayer` | Yes | Adds online players to an active recording and enrolls them for later rejoin capture. |
+| `/replay autorecord start <players...\|all> [--minutes <minutes>] [--prefix <prefix>]` | `replay.autorecord` | Yes | Starts rolling auto-record segments for named players or all players. |
+| `/replay autorecord stop` | `replay.autorecord` | Yes | Stops rolling auto-record and saves the active segment. |
+| `/replay autorecord status` | `replay.autorecord` | Yes | Shows rolling auto-record state. |
 | `/replay stop <name>` | `replay.stop` | No | Stops and saves an active recording session |
 | `/replay play <name> [server:<server>]` | `replay.play` | No | Starts replay playback for the executing player. Optional `server:` routes the player to a different Velocity backend before playback starts |
 | `/replay list [page]` | `replay.list` | No | Lists saved replays with clickable previous/next page controls |
@@ -28,6 +33,9 @@ If a player runs `/replay` with no subcommand, BetterReplay prints a permission-
 Main workflow notes:
 
 - `/replay start` uses a single-token recording name. The code reads the session name from the second argument directly.
+- `all` is a reserved target keyword for `/replay start` and `/replay autorecord start`.
+- `/replay autorecord start` uses explicit `--minutes` and `--prefix` options so numeric-only player names remain valid targets.
+- Command-started auto-record state is persisted in `auto-record-state.yml` under the plugin data folder and resumes after graceful restarts.
 - Commands that operate on saved replay names such as `stop`, `delete`, `protect`, and `unprotect` join the remaining arguments back into one name, so those saved replay names can contain spaces.
 - `/replay play` currently reads the replay name from the next token only, then optionally accepts `server:<server>` after it. Example: `/replay play Test server:Replays`.
 - Replay and recording names must be 1-64 characters long and may not contain control characters or `\ / : * ? " < > | §`.
@@ -102,6 +110,9 @@ For the benchmark metric definitions and report structure, see [BENCHMARKS.md](B
 The current permission tree is:
 
 - `replay.start`
+- `replay.start.all`
+- `replay.addplayer`
+- `replay.autorecord`
 - `replay.stop`
 - `replay.play`
 - `replay.list`

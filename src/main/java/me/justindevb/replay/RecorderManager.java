@@ -4,6 +4,10 @@ import me.justindevb.replay.chunk.ChunkRecordingArtifacts;
 import com.tcoded.folialib.wrapper.task.WrappedTask;
 import me.justindevb.replay.api.events.RecordingStartEvent;
 import me.justindevb.replay.api.events.RecordingStopEvent;
+import me.justindevb.replay.api.RecordingEnrollmentPolicy;
+import me.justindevb.replay.api.RecordingPlayerAddResult;
+import me.justindevb.replay.api.RecordingSessionOptions;
+import me.justindevb.replay.api.RecordingTarget;
 import me.justindevb.replay.recording.inventory.SharedEquipmentCaptureCache;
 import me.justindevb.replay.recording.inventory.SharedStorageCaptureCache;
 import me.justindevb.replay.storage.ReplaySaveRequest;
@@ -12,6 +16,10 @@ import me.justindevb.replay.storage.binary.BinaryReplayAppendLogRecovery;
 import me.justindevb.replay.util.ReplayMessages;
 import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
+import org.bukkit.event.EventHandler;
+import org.bukkit.event.EventPriority;
+import org.bukkit.event.Listener;
+import org.bukkit.event.player.PlayerJoinEvent;
 
 import java.io.File;
 import java.io.IOException;
@@ -23,29 +31,44 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.logging.Level;
 import java.util.stream.Stream;
 
-public class RecorderManager {
+public class RecorderManager implements Listener {
     private static final String APPEND_LOG_EXTENSION = ".appendlog";
 
     private final Replay replay;
     private final ConcurrentHashMap<String, RecordingSession> activeSessions = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, PendingAllRecording> pendingAllRecordings = new ConcurrentHashMap<>();
     private final BinaryReplayAppendLogReader appendLogReader = new BinaryReplayAppendLogReader();
     private final SharedEquipmentCaptureCache sharedEquipmentCaptureCache = new SharedEquipmentCaptureCache();
     private final SharedStorageCaptureCache sharedStorageCaptureCache = new SharedStorageCaptureCache();
+    private AutoRecordController autoRecordController;
     private WrappedTask tickTask;
 
     public RecorderManager(Replay replay) {
         this.replay = replay;
     }
 
+    public void setAutoRecordController(AutoRecordController autoRecordController) {
+        this.autoRecordController = autoRecordController;
+    }
+
     public boolean startSession(String name, Collection<Player> players, int durationSeconds) {
-        if (activeSessions.containsKey(name)) {
+        RecordingSessionOptions options = new RecordingSessionOptions(
+                new RecordingTarget.Players(players.stream().map(Player::getUniqueId).collect(java.util.stream.Collectors.toSet())),
+                RecordingEnrollmentPolicy.TARGET_PLAYERS_ON_JOIN,
+                durationSeconds,
+                false);
+        return startSession(name, players, options);
+    }
+
+    public boolean startSession(String name, Collection<Player> players, RecordingSessionOptions options) {
+        if (activeSessions.containsKey(name) || pendingAllRecordings.containsKey(name)) {
             return false;
         }
 
-        RecordingSession session = new RecordingSession(name, replay.getDataFolder(), players, durationSeconds, sharedStorageCaptureCache);
+        RecordingSession session = new RecordingSession(name, replay.getDataFolder(), players, options, sharedStorageCaptureCache);
         session.start();
 
-        Bukkit.getPluginManager().callEvent(new RecordingStartEvent(name, players, session, durationSeconds));
+        Bukkit.getPluginManager().callEvent(new RecordingStartEvent(name, players, session, options.durationSeconds()));
         activeSessions.put(name, session);
 
         if (tickTask == null) {
@@ -54,8 +77,30 @@ public class RecorderManager {
         return true;
     }
 
+    public boolean startAllPlayersSession(String name, int durationSeconds) {
+        if (activeSessions.containsKey(name) || pendingAllRecordings.containsKey(name)) {
+            return false;
+        }
+
+        List<Player> onlinePlayers = new ArrayList<>(Bukkit.getOnlinePlayers());
+        if (onlinePlayers.isEmpty()) {
+            pendingAllRecordings.put(name, new PendingAllRecording(name, durationSeconds));
+            return true;
+        }
+
+        return startSession(name, onlinePlayers, new RecordingSessionOptions(
+                new RecordingTarget.AllPlayers(),
+                RecordingEnrollmentPolicy.ALL_PLAYERS_ON_JOIN,
+                durationSeconds,
+                false));
+    }
+
 
     public boolean stopSession(String name, boolean save) {
+        if (pendingAllRecordings.remove(name) != null) {
+            return true;
+        }
+
         RecordingSession session = activeSessions.remove(name);
         if (session == null)
             return false;
@@ -96,20 +141,65 @@ public class RecorderManager {
         return activeSessions;
     }
 
-    public void recoverPendingAppendLogs() {
-        File tempFolder = new File(replay.getDataFolder(), "replays/.tmp");
-        File[] appendLogs = tempFolder.listFiles((dir, name) -> name.endsWith(APPEND_LOG_EXTENSION));
-        if (appendLogs == null || appendLogs.length == 0) {
-            return;
-        }
+    public Set<String> getPendingRecordingNames() {
+        return pendingAllRecordings.keySet();
+    }
 
-        replay.getLogger().info("Found " + appendLogs.length + " pending replay temp log(s) to recover.");
-        for (File appendLog : appendLogs) {
-            recoverAppendLog(appendLog);
+    public RecordingPlayerAddResult addPlayerToSession(String recordingName, Player player) {
+        RecordingSession session = activeSessions.get(recordingName);
+        if (session == null) {
+            return RecordingPlayerAddResult.SESSION_NOT_FOUND;
+        }
+        return session.addTrackedPlayer(player);
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void onPlayerJoin(PlayerJoinEvent event) {
+        Player player = event.getPlayer();
+        startPendingAllRecordings(player);
+        enrollJoiningPlayer(player);
+        if (autoRecordController != null) {
+            autoRecordController.handlePlayerJoin(player);
         }
     }
 
-    private void recoverAppendLog(File appendLogFile) {
+    public void enrollJoiningPlayer(Player player) {
+        for (RecordingSession session : activeSessions.values()) {
+            if (session.acceptsJoin(player)) {
+                session.addTrackedPlayer(player, false);
+            }
+        }
+    }
+
+    private void startPendingAllRecordings(Player joiningPlayer) {
+        for (PendingAllRecording pending : List.copyOf(pendingAllRecordings.values())) {
+            if (!pendingAllRecordings.remove(pending.name(), pending)) {
+                continue;
+            }
+            startSession(pending.name(), List.of(joiningPlayer), new RecordingSessionOptions(
+                    new RecordingTarget.AllPlayers(),
+                    RecordingEnrollmentPolicy.ALL_PLAYERS_ON_JOIN,
+                    pending.durationSeconds(),
+                    false));
+        }
+    }
+
+    public CompletableFuture<Void> recoverPendingAppendLogs() {
+        File tempFolder = new File(replay.getDataFolder(), "replays/.tmp");
+        File[] appendLogs = tempFolder.listFiles((dir, name) -> name.endsWith(APPEND_LOG_EXTENSION));
+        if (appendLogs == null || appendLogs.length == 0) {
+            return CompletableFuture.completedFuture(null);
+        }
+
+        replay.getLogger().info("Found " + appendLogs.length + " pending replay temp log(s) to recover.");
+        List<CompletableFuture<Void>> recoveries = new ArrayList<>();
+        for (File appendLog : appendLogs) {
+            recoveries.add(recoverAppendLog(appendLog));
+        }
+        return CompletableFuture.allOf(recoveries.toArray(CompletableFuture[]::new));
+    }
+
+    private CompletableFuture<Void> recoverAppendLog(File appendLogFile) {
         String replayName = appendLogFile.getName().substring(0, appendLogFile.getName().length() - APPEND_LOG_EXTENSION.length());
 
         BinaryReplayAppendLogRecovery recovery;
@@ -117,12 +207,12 @@ public class RecorderManager {
             recovery = appendLogReader.recover(appendLogFile.toPath());
         } catch (IOException e) {
             replay.getLogger().log(Level.SEVERE, "Failed to recover recording temp log: " + appendLogFile.getName(), e);
-            return;
+            return CompletableFuture.completedFuture(null);
         }
 
         if (recovery.timeline().isEmpty()) {
             replay.getLogger().warning("Skipping recovery for " + replayName + ": no valid events found (" + recovery.stopReason() + ")");
-            return;
+            return CompletableFuture.completedFuture(null);
         }
 
         if (recovery.discardedTail()) {
@@ -137,7 +227,7 @@ public class RecorderManager {
                 ? new ChunkRecordingArtifacts(chunkTempDirectory.toPath(), 0, 0)
                 : ChunkRecordingArtifacts.NONE;
 
-        replay.getReplayStorage().saveReplay(replayName, new ReplaySaveRequest(recovery.timeline(), recoveredStart, chunkArtifacts))
+        return replay.getReplayStorage().saveReplay(replayName, new ReplaySaveRequest(recovery.timeline(), recoveredStart, chunkArtifacts))
                 .thenCompose(v -> refreshReplayCache().thenApply(ignored -> v))
                 .thenAccept(v -> {
                     if (appendLogFile.exists() && !appendLogFile.delete()) {
@@ -200,5 +290,8 @@ public class RecorderManager {
             tickTask.cancel();
             tickTask = null;
         }
+        pendingAllRecordings.clear();
     }
+
+    private record PendingAllRecording(String name, int durationSeconds) {}
 }

@@ -22,6 +22,7 @@ In practice:
 - Viewer safety, viewer restore, vanish, Velocity default replay-server routing, list formatting, and similar live-read settings are immediate.
 - Retention settings restart the retention service.
 - Playback speed and chunk capture/playback settings affect newly started sessions only.
+- Auto-record startup defaults affect future startup or newly started auto-record controller sessions; persisted runtime state can override startup config.
 - Storage backend and MySQL connection changes still require restart.
 
 ## Minimal examples
@@ -72,6 +73,13 @@ Recording:
     Radius: 1
     Capture-Interval-Ticks: 20
     Max-Unique-Chunks-Per-Recording: 20000
+  Auto-Record:
+    Record-On-Startup: false
+    Startup-Target: all
+    Segment-Duration-Minutes: 30
+    Name-Prefix: auto
+    Save-Active-Segment-On-Shutdown: true
+    Name-Timezone: UTC
 
 Retention:
   Enabled: false
@@ -94,7 +102,7 @@ Velocity:
 
 | Key | Default | Reload scope | Notes |
 |---|---|---|---|
-| `Config-Version` | `8` | `INTERNAL` | Internal migration version written by the plugin |
+| `Config-Version` | `9` | `INTERNAL` | Internal migration version written by the plugin |
 
 ### General
 
@@ -131,6 +139,23 @@ Recording notes:
 - Chunk capture is stored only in finalized binary `.br` archives.
 - Legacy JSON replays remain timeline-only.
 - When the unique-chunk cap is reached, recording continues but additional chunk baselines are skipped.
+
+#### `Recording.Auto-Record`
+
+| Key | Default | Reload scope | Notes |
+|---|---|---|---|
+| `Recording.Auto-Record.Record-On-Startup` | `false` | `FUTURE_ONLY` | Starts rolling auto-record on startup when no persisted runtime state exists |
+| `Recording.Auto-Record.Startup-Target` | `all` | `FUTURE_ONLY` | Startup target: `all` or one player name |
+| `Recording.Auto-Record.Segment-Duration-Minutes` | `30` | `NEW_SESSIONS_ONLY` | Default segment length for startup and command starts that omit `--minutes` |
+| `Recording.Auto-Record.Name-Prefix` | `auto` | `NEW_SESSIONS_ONLY` | Prefix used for generated segment names |
+| `Recording.Auto-Record.Save-Active-Segment-On-Shutdown` | `true` | `IMMEDIATE` | Saves the active auto-record segment during graceful shutdown |
+| `Recording.Auto-Record.Name-Timezone` | `UTC` | `NEW_SESSIONS_ONLY` | Time zone for generated segment names |
+
+Auto-record notes:
+
+- Runtime `/replay autorecord start` and `/replay autorecord stop` choices are persisted to `auto-record-state.yml` in the plugin data folder.
+- Persisted enabled or disabled state takes precedence over `Record-On-Startup` on the next startup.
+- `Startup-Target` supports `all` or one named player; use the command/API for multiple named targets.
 
 ### Playback
 

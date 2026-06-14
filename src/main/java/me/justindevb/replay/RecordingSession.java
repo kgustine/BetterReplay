@@ -11,6 +11,10 @@ import me.justindevb.replay.chunk.ChunkRecordingArtifacts;
 import me.justindevb.replay.chunk.FoliaRegionChunkBaselineCaptureService;
 import me.justindevb.replay.chunk.RadiusChunkInterestTracker;
 import me.justindevb.replay.chunk.WorldChunkPacketFriendlyCaptureService;
+import me.justindevb.replay.api.RecordingEnrollmentPolicy;
+import me.justindevb.replay.api.RecordingPlayerAddResult;
+import me.justindevb.replay.api.RecordingSessionOptions;
+import me.justindevb.replay.api.RecordingTarget;
 import me.justindevb.replay.recording.EntityTracker;
 import me.justindevb.replay.recording.FoliaTrackedChunkCollector;
 import me.justindevb.replay.recording.RecordingEventHandler;
@@ -68,6 +72,10 @@ public class RecordingSession {
     private final ChunkCaptureCoordinator chunkCaptureCoordinator;
     private final TrackedChunkCollector trackedChunkCollector;
     private final SharedStorageCaptureCache sharedStorageCaptureCache;
+    private final Set<UUID> targetPlayerUuids = new HashSet<>();
+    private final boolean allPlayersTarget;
+    private final RecordingEnrollmentPolicy enrollmentPolicy;
+    private final boolean autoRecordSegment;
     private PacketListenerCommon packetListenerHandle;
 
     private static final int INVENTORY_CHECK_INTERVAL = 5;
@@ -93,8 +101,20 @@ public class RecordingSession {
                      Collection<Player> players,
                      int durationSeconds,
                      SharedStorageCaptureCache sharedStorageCaptureCache) {
+        this(name, folder, players, new RecordingSessionOptions(
+                new RecordingTarget.Players(players.stream().map(Player::getUniqueId).collect(java.util.stream.Collectors.toSet())),
+                RecordingEnrollmentPolicy.TARGET_PLAYERS_ON_JOIN,
+                durationSeconds,
+                false), sharedStorageCaptureCache);
+    }
+
+    RecordingSession(String name,
+                     File folder,
+                     Collection<Player> players,
+                     RecordingSessionOptions options,
+                     SharedStorageCaptureCache sharedStorageCaptureCache) {
         this.name = name;
-        this.durationTicks = durationSeconds > 0 ? durationSeconds * 20 : -1;
+        this.durationTicks = options.durationSeconds() > 0 ? options.durationSeconds() * 20 : -1;
         this.replay = Replay.getInstance();
         this.recordingStartedAtEpochMillis = System.currentTimeMillis();
         this.appendLogFile = new File(folder, "replays/.tmp/" + name + ".appendlog");
@@ -133,6 +153,16 @@ public class RecordingSession {
             builder,
             this::getTick,
             runnable -> replay.getFoliaLib().getScheduler().runNextTick(task -> runnable.run()));
+        if (options.target() instanceof RecordingTarget.AllPlayers) {
+            this.allPlayersTarget = true;
+        } else if (options.target() instanceof RecordingTarget.Players targetedPlayers) {
+            this.allPlayersTarget = false;
+            this.targetPlayerUuids.addAll(targetedPlayers.playerUuids());
+        } else {
+            this.allPlayersTarget = false;
+        }
+        this.enrollmentPolicy = options.enrollmentPolicy();
+        this.autoRecordSegment = options.autoRecordSegment();
     }
 
     public void start() {
@@ -340,6 +370,52 @@ public class RecordingSession {
         return tracker.isTrackedPlayer(uuid);
     }
 
+    public RecordingPlayerAddResult addTrackedPlayer(Player player) {
+        return addTrackedPlayer(player, true);
+    }
+
+    RecordingPlayerAddResult addTrackedPlayer(Player player, boolean addToTarget) {
+        if (player == null || !player.isOnline()) {
+            return RecordingPlayerAddResult.PLAYER_OFFLINE;
+        }
+        if (stopped) {
+            return RecordingPlayerAddResult.SESSION_STOPPED;
+        }
+
+        UUID uuid = player.getUniqueId();
+        if (!tracker.addPlayer(uuid)) {
+            if (addToTarget && !allPlayersTarget) {
+                targetPlayerUuids.add(uuid);
+            }
+            return RecordingPlayerAddResult.ALREADY_TRACKED;
+        }
+
+        if (addToTarget && !allPlayersTarget) {
+            targetPlayerUuids.add(uuid);
+        }
+        emitPlayerBaseline(player);
+        return RecordingPlayerAddResult.ADDED;
+    }
+
+    public boolean acceptsJoin(Player player) {
+        if (player == null || stopped) {
+            return false;
+        }
+        return switch (enrollmentPolicy) {
+            case MANUAL_ONLY -> false;
+            case TARGET_PLAYERS_ON_JOIN -> targetPlayerUuids.contains(player.getUniqueId());
+            case ALL_PLAYERS_ON_JOIN -> true;
+        };
+    }
+
+    public RecordingEnrollmentPolicy getEnrollmentPolicy() {
+        return enrollmentPolicy;
+    }
+
+    public boolean isAutoRecordSegment() {
+        return autoRecordSegment;
+    }
+
     private void captureInitialInventory() {
         for (UUID uuid : tracker.getTrackedPlayers()) {
             Player p = Bukkit.getPlayer(uuid);
@@ -352,6 +428,29 @@ public class RecordingSession {
             builder.addEvent(inventoryCaptureService.toEquipmentEvent(tick, uuid.toString(), equipment));
             builder.addEvent(inventoryCaptureService.toStorageEvent(tick, uuid.toString(), storage));
         }
+    }
+
+    private void emitPlayerBaseline(Player player) {
+        UUID uuid = player.getUniqueId();
+        Location loc = player.getLocation();
+        builder.addEvent(new TimelineEvent.PlayerMove(
+                tick,
+                uuid.toString(),
+                player.getName(),
+                player.getWorld().getName(),
+                loc.getX(), loc.getY(), loc.getZ(),
+                loc.getYaw(), loc.getPitch(),
+                player.getPose().name()
+        ));
+
+        CapturedEquipmentState equipment = inventoryCaptureService.captureEquipment(player);
+        CapturedInventoryStorageSnapshot storage = inventoryCaptureService.captureStorage(player);
+        lastEquipmentState.put(uuid, equipment);
+        lastInventoryStorageSnapshot.put(uuid, storage);
+        equipmentDirtyPlayers.remove(uuid);
+        inventoryDirtyPlayers.remove(uuid);
+        builder.addEvent(inventoryCaptureService.toEquipmentEvent(tick, uuid.toString(), equipment));
+        builder.addEvent(inventoryCaptureService.toStorageEvent(tick, uuid.toString(), storage));
     }
 
     private void markInventoryDirty(UUID uuid) {

@@ -9,7 +9,9 @@ import org.bukkit.entity.Player;
 import java.io.File;
 import java.util.Collection;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 
 public interface ReplayManager {
@@ -23,6 +25,37 @@ public interface ReplayManager {
      * @return true if the session was started, false if a session with that name already exists
      */
     boolean startRecording(String name, Collection<Player> players, int durationSeconds);
+
+    /**
+     * Starts an all-player recording. If no players are online, the recording
+     * name is reserved and recording begins when the first player joins.
+     */
+    boolean startRecordingAll(String name, int durationSeconds);
+
+    /**
+     * Adds an online player to an active recording.
+     */
+    RecordingPlayerAddResult addPlayerToRecording(String recordingName, Player player);
+
+    /**
+     * Adds online players to an active recording and returns per-player results.
+     */
+    Map<UUID, RecordingPlayerAddResult> addPlayersToRecording(String recordingName, Collection<Player> players);
+
+    /**
+     * Starts rolling auto-record segments for a target.
+     */
+    boolean startAutoRecording(String namePrefix, RecordingTarget target, int segmentDurationSeconds);
+
+    /**
+     * Stops rolling auto-record and optionally saves the active segment.
+     */
+    boolean stopAutoRecording(boolean saveActiveSegment);
+
+    /**
+     * Gets the current rolling auto-record status when enabled.
+     */
+    Optional<AutoRecordingStatus> getAutoRecordingStatus();
 
     /**
      * Stops a running recording
