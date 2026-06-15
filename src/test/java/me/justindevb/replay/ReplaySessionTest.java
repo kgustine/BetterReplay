@@ -56,4 +56,23 @@ class ReplaySessionTest {
 
         assertTrue(creationEvents.isEmpty());
     }
+
+    @Test
+    void collectEntityCreationEventsForSeek_usesRejoinMoveAfterQuit() {
+        UUID uuid = UUID.randomUUID();
+        String uuidString = uuid.toString();
+        TimelineEvent.PlayerMove initialJoin = new TimelineEvent.PlayerMove(
+                0, uuidString, "Steve", "world", 1.0, 64.0, 1.0, 0.0f, 0.0f, "STANDING");
+        TimelineEvent.PlayerMove rejoin = new TimelineEvent.PlayerMove(
+                40, uuidString, "Steve", "world", 10.0, 64.0, 10.0, 0.0f, 0.0f, "STANDING");
+
+        List<TimelineEvent> timeline = List.of(
+                initialJoin,
+                new TimelineEvent.PlayerQuit(20, uuidString),
+                rejoin);
+
+        Map<UUID, TimelineEvent> creationEvents = ReplaySession.collectEntityCreationEventsForSeek(timeline, timeline.size());
+
+        assertSame(rejoin, creationEvents.get(uuid));
+    }
 }

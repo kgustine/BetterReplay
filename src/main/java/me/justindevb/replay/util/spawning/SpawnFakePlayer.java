@@ -25,6 +25,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.function.BooleanSupplier;
 
 public class SpawnFakePlayer {
 
@@ -36,18 +37,25 @@ public class SpawnFakePlayer {
 
     private final UUID fakeUuid;
     private final Runnable onSpawned;
+    private final BooleanSupplier shouldSpawn;
 
     public SpawnFakePlayer(UUID profileUuid, String name, Location spawnLocation, Player viewer, int entityId) {
         this(profileUuid, name, spawnLocation, viewer, entityId, null);
     }
 
     public SpawnFakePlayer(UUID profileUuid, String name, Location spawnLocation, Player viewer, int entityId, Runnable onSpawned) {
+        this(profileUuid, name, spawnLocation, viewer, entityId, onSpawned, () -> true);
+    }
+
+    public SpawnFakePlayer(UUID profileUuid, String name, Location spawnLocation, Player viewer, int entityId,
+                           Runnable onSpawned, BooleanSupplier shouldSpawn) {
         this.profileUuid = profileUuid;
         this.name = name;
         this.spawnLocation = spawnLocation;
         this.viewer = viewer;
         this.entityId = entityId;
         this.onSpawned = onSpawned;
+        this.shouldSpawn = shouldSpawn;
 
         this.fakeUuid = UUID.randomUUID();
 
@@ -87,9 +95,7 @@ public class SpawnFakePlayer {
 
             UserProfile profile = new UserProfile(fakeUuid, sanitizeProfileName(name), textures);
 
-            Replay.getInstance().getFoliaLib().getScheduler().runNextTick(syncTask -> {
-                spawnNow(profile);
-            });
+            Replay.getInstance().getFoliaLib().getScheduler().runNextTick(syncTask -> spawnNow(profile));
         });
     }
 
@@ -116,6 +122,10 @@ public class SpawnFakePlayer {
     }
 
     private void spawnNow(UserProfile profile) {
+        if (!shouldSpawn.getAsBoolean()) {
+            return;
+        }
+
         List<WrapperPlayServerPlayerInfoUpdate.PlayerInfo> playerInfoList = new ArrayList<>();
         playerInfoList.add(new WrapperPlayServerPlayerInfoUpdate.PlayerInfo(profile));
 

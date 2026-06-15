@@ -52,6 +52,7 @@ public class ReplaySession implements Listener, PacketListener {
     private final Set<UUID> deadEntities = new HashSet<>();
     private final Map<UUID, RecordedEntity> recordedEntities = new HashMap<>();
     private int tick = 0;
+    private int currentRecordedTick = 0;
     private boolean paused = false;
     private boolean stopped = false;
     private double playbackSpeed;
@@ -187,6 +188,11 @@ public class ReplaySession implements Listener, PacketListener {
             for (int g = 0; g < tickGroupsToProcess && tick < timeline.size(); g++) {
                 TimelineEvent firstEvent = timeline.get(tick);
                 int recordedTick = firstEvent.tick();
+                if (recordedTick > currentRecordedTick + (tick == 0 ? 0 : 1)) {
+                    currentRecordedTick++;
+                    continue;
+                }
+                currentRecordedTick = recordedTick;
 
             while (tick < timeline.size()) {
                 TimelineEvent event = timeline.get(tick);
@@ -347,16 +353,13 @@ public class ReplaySession implements Listener, PacketListener {
     private void skipSeconds(int seconds) {
         if (timeline == null || timeline.isEmpty()) return;
 
-        int currentIndex = Math.max(0, Math.min(tick, timeline.size()));
-        int currentRecordedTick = currentIndex > 0 ? getRecordedTickAtIndex(currentIndex - 1) : 0;
         int maxRecordedTick = getRecordedTickAtIndex(timeline.size() - 1);
 
         int targetRecordedTick = currentRecordedTick + (seconds * 20);
         if (targetRecordedTick < 0) targetRecordedTick = 0;
         if (targetRecordedTick > maxRecordedTick) targetRecordedTick = maxRecordedTick;
 
-        int targetIndex = findTimelineIndexAfterRecordedTick(targetRecordedTick);
-        seekToIndex(targetIndex);
+        seekToRecordedTick(targetRecordedTick);
     }
 
     private void stepTick(int direction) {
@@ -379,11 +382,21 @@ public class ReplaySession implements Listener, PacketListener {
         }
     }
 
+    private void seekToRecordedTick(int targetRecordedTick) {
+        int targetIndex = findTimelineIndexAfterRecordedTick(targetRecordedTick);
+        seekToIndex(targetIndex, targetRecordedTick);
+    }
+
     private void seekToIndex(int targetIndex) {
+        int targetRecordedTick = targetIndex > 0 ? getRecordedTickAtIndex(targetIndex - 1) : 0;
+        seekToIndex(targetIndex, targetRecordedTick);
+    }
+
+    private void seekToIndex(int targetIndex, int targetRecordedTick) {
         int currentIndex = Math.max(0, Math.min(tick, timeline.size()));
         targetIndex = Math.max(0, Math.min(targetIndex, timeline.size()));
 
-        if (targetIndex == currentIndex) return;
+        if (targetIndex == currentIndex && targetRecordedTick == currentRecordedTick) return;
 
         blockManager.incrementEpoch();
 
@@ -395,6 +408,7 @@ public class ReplaySession implements Listener, PacketListener {
 
         syncEntityStatesAtIndex(targetIndex);
         tick = targetIndex;
+        currentRecordedTick = Math.max(0, Math.min(targetRecordedTick, getRecordedTickAtIndex(timeline.size() - 1)));
         sendActionBar();
     }
 
@@ -423,8 +437,19 @@ public class ReplaySession implements Listener, PacketListener {
             firstEventByUUID.putIfAbsent(uuid, event);
 
             switch (event) {
-                case TimelineEvent.PlayerMove ignored2 -> lastLocationByUUID.put(uuid, event);
-                case TimelineEvent.EntityMove ignored2 -> lastLocationByUUID.put(uuid, event);
+                case TimelineEvent.PlayerMove ignored2 -> {
+                    lastLocationByUUID.put(uuid, event);
+                    shouldHaveQuitAtTarget.remove(uuid);
+                    shouldBeDeadAtTarget.remove(uuid);
+                }
+                case TimelineEvent.EntityMove ignored2 -> {
+                    lastLocationByUUID.put(uuid, event);
+                    shouldBeDeadAtTarget.remove(uuid);
+                }
+                case TimelineEvent.EntitySpawn ignored2 -> {
+                    lastLocationByUUID.put(uuid, event);
+                    shouldBeDeadAtTarget.remove(uuid);
+                }
                 case TimelineEvent.InventoryStorageUpdate inv -> lastInventoryByUUID.put(uuid, inv);
                 case TimelineEvent.EquipmentStateUpdate equipment -> lastEquipmentByUUID.put(uuid, equipment);
                 case TimelineEvent.Damaged damage -> {
@@ -513,12 +538,15 @@ public class ReplaySession implements Listener, PacketListener {
         int end = Math.min(targetIndex, timeline.size());
         for (int i = 0; i < end; i++) {
             TimelineEvent event = timeline.get(i);
-            if (!isEntityCreationEvent(event)) continue;
-
             String uuidStr = event.uuid();
             if (uuidStr == null) continue;
             try {
-                creationEventByUUID.putIfAbsent(UUID.fromString(uuidStr), event);
+                UUID uuid = UUID.fromString(uuidStr);
+                if (event instanceof TimelineEvent.PlayerQuit || event instanceof TimelineEvent.EntityDeath) {
+                    creationEventByUUID.remove(uuid);
+                } else if (isEntityCreationEvent(event)) {
+                    creationEventByUUID.putIfAbsent(uuid, event);
+                }
             } catch (IllegalArgumentException ignored) {
             }
         }
@@ -662,7 +690,6 @@ public class ReplaySession implements Listener, PacketListener {
     }
 
     private void sendActionBar() {
-        int currentRecordedTick = tick > 0 ? getRecordedTickAtIndex(tick - 1) : 0;
         int totalRecordedTicks = getRecordedTickAtIndex(timeline.size() - 1);
         String current = formatTime(currentRecordedTick);
         String total = formatTime(totalRecordedTicks);

@@ -60,9 +60,10 @@ public class RecordedPlayer extends RecordedEntity {
     public void spawn(Location location) {
         currentLocation = location;
         SpawnFakePlayer fakePlayer = new SpawnFakePlayer(uuid, name, location, viewer, super.fakeEntityId, () -> {
+            if (isDestroyed()) return;
             this.spawned = true;
             sendMetadata();
-        });
+        }, () -> !isDestroyed());
         this.fakeProfileUuid = fakePlayer.getFakeUuid();
     }
 
