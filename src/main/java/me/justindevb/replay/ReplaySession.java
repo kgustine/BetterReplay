@@ -234,9 +234,7 @@ public class ReplaySession implements Listener, PacketListener {
                 }
 
                 if (event instanceof TimelineEvent.PlayerQuit) {
-                    if (recordedEntities.get(uuid) instanceof RecordedPlayer rp) {
-                        ReplayMessages.send(viewer, "[BetterReplay] " + rp.getName() + " disconnected");
-                    }
+                    sendLifecycleMessagesForCurrentEvent(tick);
                     RecordedEntity entity = recordedEntities.remove(uuid);
                     if (entity != null) {
                         entity.destroy();
@@ -277,6 +275,7 @@ public class ReplaySession implements Listener, PacketListener {
                     recordedEntities.put(uuid, recorded);
 
                     if (recorded instanceof RecordedPlayer rp) {
+                        sendLifecycleMessagesForCurrentEvent(tick);
                         TimelineEvent.InventoryStorageUpdate storage = getInventoryStorageSnapshotForPlayer(uuid);
                         if (storage != null) {
                             rp.updateStorage(storage);
@@ -419,6 +418,10 @@ public class ReplaySession implements Listener, PacketListener {
         for (String message : collectLifecycleMessagesForSeek(timeline, fromIndex, toIndex)) {
             viewer.sendMessage(message);
         }
+    }
+
+    private void sendLifecycleMessagesForCurrentEvent(int eventIndex) {
+        sendLifecycleMessagesForSeek(eventIndex, eventIndex + 1);
     }
 
     static TimelineEvent findInitialReplayTeleportEvent(
