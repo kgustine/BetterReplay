@@ -75,4 +75,80 @@ class ReplaySessionTest {
 
         assertSame(rejoin, creationEvents.get(uuid));
     }
+
+    @Test
+    void collectLifecycleMessagesForSeek_reportsLateJoin() {
+        UUID initialUuid = UUID.randomUUID();
+        UUID lateUuid = UUID.randomUUID();
+        List<TimelineEvent> timeline = List.of(
+                playerMove(0, initialUuid, "Steve"),
+                playerMove(40, lateUuid, "Alex"));
+
+        List<String> messages = ReplaySession.collectLifecycleMessagesForSeek(timeline, 0, timeline.size());
+
+        assertEquals(List.of("[BetterReplay] Alex joined"), messages);
+    }
+
+    @Test
+    void collectLifecycleMessagesForSeek_reportsDisconnectWithLastKnownName() {
+        UUID uuid = UUID.randomUUID();
+        List<TimelineEvent> timeline = List.of(
+                playerMove(0, uuid, "Steve"),
+                new TimelineEvent.PlayerQuit(20, uuid.toString()));
+
+        List<String> messages = ReplaySession.collectLifecycleMessagesForSeek(timeline, 1, timeline.size());
+
+        assertEquals(List.of("[BetterReplay] Steve disconnected"), messages);
+    }
+
+    @Test
+    void collectLifecycleMessagesForSeek_ignoresInitialPlayersAtRecordingStart() {
+        UUID uuid = UUID.randomUUID();
+        List<TimelineEvent> timeline = List.of(playerMove(0, uuid, "Steve"));
+
+        List<String> messages = ReplaySession.collectLifecycleMessagesForSeek(timeline, 0, timeline.size());
+
+        assertTrue(messages.isEmpty());
+    }
+
+    @Test
+    void collectLifecycleMessagesForSeek_reportsRejoinAfterQuit() {
+        UUID uuid = UUID.randomUUID();
+        List<TimelineEvent> timeline = List.of(
+                playerMove(0, uuid, "Steve"),
+                new TimelineEvent.PlayerQuit(20, uuid.toString()),
+                playerMove(40, uuid, "Steve"));
+
+        List<String> messages = ReplaySession.collectLifecycleMessagesForSeek(timeline, 1, timeline.size());
+
+        assertEquals(List.of(
+                "[BetterReplay] Steve disconnected",
+                "[BetterReplay] Steve joined"), messages);
+    }
+
+    @Test
+    void collectLifecycleMessagesForSeek_ignoresBackwardRanges() {
+        UUID uuid = UUID.randomUUID();
+        List<TimelineEvent> timeline = List.of(
+                playerMove(0, uuid, "Steve"),
+                new TimelineEvent.PlayerQuit(20, uuid.toString()));
+
+        List<String> messages = ReplaySession.collectLifecycleMessagesForSeek(timeline, timeline.size(), 0);
+
+        assertTrue(messages.isEmpty());
+    }
+
+    private TimelineEvent.PlayerMove playerMove(int tick, UUID uuid, String name) {
+        return new TimelineEvent.PlayerMove(
+                tick,
+                uuid.toString(),
+                name,
+                "world",
+                1.0,
+                64.0,
+                1.0,
+                0.0f,
+                0.0f,
+                "STANDING");
+    }
 }

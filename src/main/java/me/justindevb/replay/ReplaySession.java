@@ -403,6 +403,7 @@ public class ReplaySession implements Listener, PacketListener {
         blockManager.incrementEpoch();
 
         if (targetIndex > currentIndex) {
+            sendLifecycleMessagesForSeek(currentIndex, targetIndex);
             blockManager.applyReplayBlockChangesInRange(currentIndex, targetIndex, timeline);
         } else {
             blockManager.rebuildReplayBlockStateUntil(targetIndex, timeline);
@@ -412,6 +413,83 @@ public class ReplaySession implements Listener, PacketListener {
         tick = targetIndex;
         currentRecordedTick = Math.max(0, Math.min(targetRecordedTick, getRecordedTickAtIndex(timeline.size() - 1)));
         sendActionBar();
+    }
+
+    private void sendLifecycleMessagesForSeek(int fromIndex, int toIndex) {
+        for (String message : collectLifecycleMessagesForSeek(timeline, fromIndex, toIndex)) {
+            viewer.sendMessage(message);
+        }
+    }
+
+    static List<String> collectLifecycleMessagesForSeek(List<TimelineEvent> timeline, int fromIndex, int toIndex) {
+        if (timeline == null || timeline.isEmpty()) return List.of();
+
+        int from = Math.max(0, Math.min(fromIndex, timeline.size()));
+        int to = Math.max(0, Math.min(toIndex, timeline.size()));
+        if (to <= from) return List.of();
+
+        int recordingStartTick = timeline.get(0).tick();
+        Map<UUID, Boolean> presentPlayers = new HashMap<>();
+        Map<UUID, String> playerNames = new HashMap<>();
+        Set<UUID> seenPlayers = new HashSet<>();
+
+        for (int i = 0; i < from; i++) {
+            TimelineEvent event = timeline.get(i);
+            UUID uuid = parseUuid(event.uuid());
+            if (uuid == null) continue;
+
+            switch (event) {
+                case TimelineEvent.PlayerMove move -> {
+                    playerNames.put(uuid, move.name() != null ? move.name() : "Unknown");
+                    presentPlayers.put(uuid, true);
+                    seenPlayers.add(uuid);
+                }
+                case TimelineEvent.PlayerQuit ignored -> presentPlayers.put(uuid, false);
+                default -> {}
+            }
+        }
+
+        List<String> messages = new ArrayList<>();
+        for (int i = from; i < to; i++) {
+            TimelineEvent event = timeline.get(i);
+            UUID uuid = parseUuid(event.uuid());
+            if (uuid == null) continue;
+
+            switch (event) {
+                case TimelineEvent.PlayerMove move -> {
+                    String name = move.name() != null ? move.name() : "Unknown";
+                    playerNames.put(uuid, name);
+
+                    boolean present = presentPlayers.getOrDefault(uuid, false);
+                    boolean rejoin = seenPlayers.contains(uuid) && !present;
+                    boolean lateJoin = !seenPlayers.contains(uuid) && move.tick() > recordingStartTick;
+                    if (!present && (rejoin || lateJoin)) {
+                        messages.add("[BetterReplay] " + name + " joined");
+                    }
+
+                    presentPlayers.put(uuid, true);
+                    seenPlayers.add(uuid);
+                }
+                case TimelineEvent.PlayerQuit ignored -> {
+                    if (presentPlayers.getOrDefault(uuid, false)) {
+                        messages.add("[BetterReplay] " + playerNames.getOrDefault(uuid, uuid.toString()) + " disconnected");
+                    }
+                    presentPlayers.put(uuid, false);
+                }
+                default -> {}
+            }
+        }
+
+        return messages;
+    }
+
+    private static UUID parseUuid(String uuidStr) {
+        if (uuidStr == null) return null;
+        try {
+            return UUID.fromString(uuidStr);
+        } catch (IllegalArgumentException ignored) {
+            return null;
+        }
     }
 
     private void syncEntityStatesAtIndex(int targetIndex) {
