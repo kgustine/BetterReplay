@@ -13,6 +13,7 @@ import org.bukkit.event.player.PlayerJoinEvent;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 
 public class ReplayViewerStateManager implements Listener {
@@ -84,6 +85,20 @@ public class ReplayViewerStateManager implements Listener {
             restoreViewerVisibility(viewer);
         }
         viewer.setFallDistance(0.0F);
+    }
+
+    public void restoreViewerStateAfter(Player viewer, ReplayViewerState state, CompletableFuture<?> previousTeleport) {
+        if (viewer == null || state == null) {
+            return;
+        }
+
+        if (previousTeleport == null || previousTeleport.isDone()) {
+            restoreViewerState(viewer, state);
+            return;
+        }
+
+        previousTeleport.whenComplete((ignored, throwable) ->
+                replay.getFoliaLib().getScheduler().runAtEntity(viewer, task -> restoreViewerState(viewer, state)));
     }
 
     public void queuePendingRestore(UUID viewerId, ReplayViewerState state) {

@@ -2,6 +2,7 @@ package me.justindevb.replay.playback;
 
 import com.tcoded.folialib.FoliaLib;
 import com.tcoded.folialib.impl.PlatformScheduler;
+import com.tcoded.folialib.wrapper.task.WrappedTask;
 import me.justindevb.replay.Replay;
 import org.bukkit.Bukkit;
 import org.bukkit.GameMode;
@@ -13,15 +14,19 @@ import org.bukkit.event.player.PlayerJoinEvent;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.MockedStatic;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.function.Consumer;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.times;
@@ -139,6 +144,36 @@ class ReplayViewerStateManagerTest {
         verify(viewer).setAllowFlight(false);
         verify(viewer).setFlying(false);
         verify(viewer, times(2)).setFallDistance(0.0F);
+    }
+
+    @Test
+    void restoreViewerStateAfter_pendingTeleport_defersRestoreUntilTeleportCompletes() {
+        when(replay.getFoliaLib()).thenReturn(foliaLib);
+        when(foliaLib.getScheduler()).thenReturn(scheduler);
+        when(replay.getConfig()).thenReturn(config);
+        when(config.getBoolean("Playback.Restore-Viewer-Location-On-Stop", true)).thenReturn(true);
+        when(config.getBoolean("Playback.Restore-Viewer-GameMode-On-Stop", true)).thenReturn(true);
+        when(config.getBoolean("Playback.Restore-Viewer-Flight-On-Stop", true)).thenReturn(true);
+        when(returnLocation.getWorld()).thenReturn(world);
+        when(returnLocation.clone()).thenReturn(returnLocationClone);
+        CompletableFuture<Boolean> pendingReplayTeleport = new CompletableFuture<>();
+        ReplayViewerState state = new ReplayViewerState(returnLocation, GameMode.SURVIVAL, false, false);
+
+        manager.restoreViewerStateAfter(viewer, state, pendingReplayTeleport);
+
+        verify(scheduler, never()).teleportAsync(viewer, returnLocationClone);
+        verify(scheduler, never()).runAtEntity(eq(viewer), org.mockito.ArgumentMatchers.any());
+
+        pendingReplayTeleport.complete(true);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Consumer<WrappedTask>> taskCaptor = ArgumentCaptor.forClass(Consumer.class);
+        verify(scheduler).runAtEntity(eq(viewer), taskCaptor.capture());
+
+        taskCaptor.getValue().accept(null);
+
+        verify(scheduler).teleportAsync(viewer, returnLocationClone);
+        verify(viewer).setGameMode(GameMode.SURVIVAL);
     }
 
     @Test

@@ -34,6 +34,7 @@ import org.bukkit.event.player.PlayerInteractAtEntityEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
 
 import java.util.*;
+import java.util.concurrent.CompletableFuture;
 
 /**
  * Coordinator for a single replay viewing session.
@@ -64,6 +65,7 @@ public class ReplaySession implements Listener, PacketListener {
     private boolean suppressViewerStateRestore = false;
     private boolean suppressStopMessage = false;
     private boolean queueViewerStateRestoreOnRejoin = false;
+    private CompletableFuture<Boolean> initialReplayTeleportFuture = CompletableFuture.completedFuture(true);
 
     // Delegates
     private final ReplayBlockManager blockManager;
@@ -148,7 +150,7 @@ public class ReplaySession implements Listener, PacketListener {
                 default -> null;
             };
             if (teleportLoc != null && teleportLoc.getWorld() != null) {
-                replay.getFoliaLib().getScheduler().teleportAsync(viewer, teleportLoc);
+                initialReplayTeleportFuture = replay.getFoliaLib().getScheduler().teleportAsync(viewer, teleportLoc);
             }
         }
 
@@ -663,7 +665,7 @@ public class ReplaySession implements Listener, PacketListener {
                 && ReplayConfigSetting.PLAYBACK_RESTORE_VIEWER_STATE_ON_REJOIN.getBoolean(replay.getConfig())) {
             viewerStateManager.queuePendingRestore(viewer.getUniqueId(), savedViewerState);
         } else if (!queueViewerStateRestoreOnRejoin) {
-            viewerStateManager.restoreViewerState(viewer, savedViewerState);
+            viewerStateManager.restoreViewerStateAfter(viewer, savedViewerState, initialReplayTeleportFuture);
         }
 
         savedViewerState = null;
