@@ -77,6 +77,54 @@ class ReplaySessionTest {
     }
 
     @Test
+    void findInitialReplayTeleportEvent_prefersNearestPlayerAtFirstPlayerTick() {
+        TimelineEvent.EntitySpawn nearbyEntity = new TimelineEvent.EntitySpawn(
+                0, UUID.randomUUID().toString(), "ZOMBIE", "world", 1.0, 64.0, 1.0);
+        TimelineEvent.PlayerMove farPlayer = playerMove(0, UUID.randomUUID(), "Steve", "world", 100.0, 64.0, 0.0);
+        TimelineEvent.PlayerMove nearPlayer = playerMove(0, UUID.randomUUID(), "Alex", "world", 5.0, 64.0, 0.0);
+        List<TimelineEvent> timeline = List.of(nearbyEntity, farPlayer, nearPlayer);
+
+        TimelineEvent selected = ReplaySession.findInitialReplayTeleportEvent(timeline, "world", 0.0, 64.0, 0.0);
+
+        assertSame(nearPlayer, selected);
+    }
+
+    @Test
+    void findInitialReplayTeleportEvent_ignoresLaterJoiners() {
+        TimelineEvent.PlayerMove firstPlayer = playerMove(0, UUID.randomUUID(), "Steve", "world", 100.0, 64.0, 0.0);
+        TimelineEvent.PlayerMove laterNearPlayer = playerMove(40, UUID.randomUUID(), "Alex", "world", 1.0, 64.0, 0.0);
+        List<TimelineEvent> timeline = List.of(firstPlayer, laterNearPlayer);
+
+        TimelineEvent selected = ReplaySession.findInitialReplayTeleportEvent(timeline, "world", 0.0, 64.0, 0.0);
+
+        assertSame(firstPlayer, selected);
+    }
+
+    @Test
+    void findInitialReplayTeleportEvent_usesFirstPlayerWhenNoPreferredWorldMatch() {
+        TimelineEvent.PlayerMove firstPlayer = playerMove(0, UUID.randomUUID(), "Steve", "world_nether", 100.0, 64.0, 0.0);
+        TimelineEvent.PlayerMove secondPlayer = playerMove(0, UUID.randomUUID(), "Alex", "world_the_end", 1.0, 64.0, 0.0);
+        List<TimelineEvent> timeline = List.of(firstPlayer, secondPlayer);
+
+        TimelineEvent selected = ReplaySession.findInitialReplayTeleportEvent(timeline, "world", 0.0, 64.0, 0.0);
+
+        assertSame(firstPlayer, selected);
+    }
+
+    @Test
+    void findInitialReplayTeleportEvent_fallsBackToFirstEntityWhenNoPlayersExist() {
+        TimelineEvent.EntitySpawn firstEntity = new TimelineEvent.EntitySpawn(
+                0, UUID.randomUUID().toString(), "ZOMBIE", "world", 1.0, 64.0, 1.0);
+        TimelineEvent.EntityMove secondEntity = new TimelineEvent.EntityMove(
+                0, UUID.randomUUID().toString(), "COW", "world", 5.0, 64.0, 5.0, 0.0f, 0.0f);
+        List<TimelineEvent> timeline = List.of(firstEntity, secondEntity);
+
+        TimelineEvent selected = ReplaySession.findInitialReplayTeleportEvent(timeline, "world", 0.0, 64.0, 0.0);
+
+        assertSame(firstEntity, selected);
+    }
+
+    @Test
     void collectLifecycleMessagesForSeek_reportsLateJoin() {
         UUID initialUuid = UUID.randomUUID();
         UUID lateUuid = UUID.randomUUID();
@@ -139,14 +187,26 @@ class ReplaySessionTest {
     }
 
     private TimelineEvent.PlayerMove playerMove(int tick, UUID uuid, String name) {
+        return playerMove(tick, uuid, name, "world", 1.0, 64.0, 1.0);
+    }
+
+    private TimelineEvent.PlayerMove playerMove(
+            int tick,
+            UUID uuid,
+            String name,
+            String world,
+            double x,
+            double y,
+            double z
+    ) {
         return new TimelineEvent.PlayerMove(
                 tick,
                 uuid.toString(),
                 name,
-                "world",
-                1.0,
-                64.0,
-                1.0,
+                world,
+                x,
+                y,
+                z,
                 0.0f,
                 0.0f,
                 "STANDING");

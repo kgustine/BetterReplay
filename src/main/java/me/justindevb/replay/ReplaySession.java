@@ -136,19 +136,19 @@ public class ReplaySession implements Listener, PacketListener {
         blockManager.configureChunkReplayContext(timeline, () -> tick);
         applyReplayViewerSafety();
 
-        TimelineEvent firstLocationEvent = timeline.stream()
-                .filter(e -> e instanceof TimelineEvent.PlayerMove || e instanceof TimelineEvent.EntityMove
-                        || e instanceof TimelineEvent.EntitySpawn)
-                .findFirst()
-                .orElse(null);
+        Location viewerLocation = viewer.getLocation();
+        String preferredWorld = viewerLocation != null && viewerLocation.getWorld() != null
+                ? viewerLocation.getWorld().getName()
+                : null;
+        TimelineEvent firstLocationEvent = findInitialReplayTeleportEvent(
+                timeline,
+                preferredWorld,
+                viewerLocation != null ? viewerLocation.getX() : 0.0D,
+                viewerLocation != null ? viewerLocation.getY() : 0.0D,
+                viewerLocation != null ? viewerLocation.getZ() : 0.0D);
 
         if (firstLocationEvent != null) {
-            Location teleportLoc = switch (firstLocationEvent) {
-                case TimelineEvent.PlayerMove e -> new Location(Bukkit.getWorld(e.world()), e.x(), e.y(), e.z(), e.yaw(), e.pitch());
-                case TimelineEvent.EntityMove e -> new Location(Bukkit.getWorld(e.world()), e.x(), e.y(), e.z(), e.yaw(), e.pitch());
-                case TimelineEvent.EntitySpawn e -> new Location(Bukkit.getWorld(e.world()), e.x(), e.y(), e.z(), 0f, 0f);
-                default -> null;
-            };
+            Location teleportLoc = locationFromEvent(firstLocationEvent);
             if (teleportLoc != null && teleportLoc.getWorld() != null) {
                 initialReplayTeleportFuture = replay.getFoliaLib().getScheduler().teleportAsync(viewer, teleportLoc);
             }
@@ -419,6 +419,66 @@ public class ReplaySession implements Listener, PacketListener {
         for (String message : collectLifecycleMessagesForSeek(timeline, fromIndex, toIndex)) {
             viewer.sendMessage(message);
         }
+    }
+
+    static TimelineEvent findInitialReplayTeleportEvent(
+            List<TimelineEvent> timeline,
+            String preferredWorld,
+            double preferredX,
+            double preferredY,
+            double preferredZ
+    ) {
+        if (timeline == null || timeline.isEmpty()) return null;
+
+        TimelineEvent firstLocationEvent = null;
+        TimelineEvent firstPlayerMoveAtStart = null;
+        TimelineEvent nearestPlayerMoveAtStart = null;
+        int firstPlayerMoveTick = Integer.MAX_VALUE;
+        double nearestDistanceSquared = Double.MAX_VALUE;
+
+        for (TimelineEvent event : timeline) {
+            if (firstLocationEvent == null && isEntityCreationEvent(event)) {
+                firstLocationEvent = event;
+            }
+
+            if (!(event instanceof TimelineEvent.PlayerMove playerMove)) {
+                continue;
+            }
+
+            if (playerMove.tick() < firstPlayerMoveTick) {
+                firstPlayerMoveTick = playerMove.tick();
+                firstPlayerMoveAtStart = playerMove;
+                nearestPlayerMoveAtStart = null;
+                nearestDistanceSquared = Double.MAX_VALUE;
+            }
+
+            if (playerMove.tick() != firstPlayerMoveTick) {
+                continue;
+            }
+
+            if (firstPlayerMoveAtStart == null) {
+                firstPlayerMoveAtStart = playerMove;
+            }
+
+            if (preferredWorld != null && preferredWorld.equals(playerMove.world())) {
+                double distanceSquared = distanceSquared(playerMove, preferredX, preferredY, preferredZ);
+                if (distanceSquared < nearestDistanceSquared) {
+                    nearestDistanceSquared = distanceSquared;
+                    nearestPlayerMoveAtStart = playerMove;
+                }
+            }
+        }
+
+        if (nearestPlayerMoveAtStart != null) return nearestPlayerMoveAtStart;
+        if (firstPlayerMoveAtStart != null) return firstPlayerMoveAtStart;
+        return firstLocationEvent;
+    }
+
+    private static double distanceSquared(TimelineEvent.PlayerMove playerMove, double x, double y, double z) {
+        double dx = playerMove.x() - x;
+        double dy = playerMove.y() - y;
+        double dz = playerMove.z() - z;
+        return dx * dx + dy * dy + dz * dz;
     }
 
     static List<String> collectLifecycleMessagesForSeek(List<TimelineEvent> timeline, int fromIndex, int toIndex) {
