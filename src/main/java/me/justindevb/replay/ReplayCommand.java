@@ -580,6 +580,11 @@ public class ReplayCommand implements CommandExecutor, TabCompleter {
                 sender.sendMessage("§cUsage: /replay start <name> all [durationSeconds]");
                 return true;
             }
+            Optional<String> invalidSessionName = ReplayNames.validateRecordingName(sessionName);
+            if (invalidSessionName.isPresent()) {
+                sender.sendMessage("§c" + invalidSessionName.get());
+                return true;
+            }
             int duration = -1;
             if (args.length == 4) {
                 try {
@@ -608,6 +613,11 @@ public class ReplayCommand implements CommandExecutor, TabCompleter {
             sender.sendMessage("You do not have permission");
             return true;
         }
+        Optional<String> invalidSessionName = ReplayNames.validateRecordingName(sessionName);
+        if (invalidSessionName.isPresent()) {
+            sender.sendMessage("§c" + invalidSessionName.get());
+            return true;
+        }
 
         int duration = parseOptionalTrailingInt(args, 2);
         int endIndex = duration != -1 ? args.length - 1 : args.length;
@@ -617,7 +627,7 @@ public class ReplayCommand implements CommandExecutor, TabCompleter {
             if (target != null) {
                 targets.add(target);
             } else {
-                sender.sendMessage("§cPlayer not found: " + args[i]);
+                ReplayMessages.send(sender, "§cPlayer not found: " + args[i]);
             }
         }
         if (targets.isEmpty()) {
