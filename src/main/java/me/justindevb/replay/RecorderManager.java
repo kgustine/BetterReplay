@@ -106,16 +106,24 @@ public class RecorderManager implements Listener {
             return false;
 
         session.stop(save);
-
-        replay.getFoliaLib().getScheduler().runNextTick(task -> {
-            Bukkit.getPluginManager().callEvent(new RecordingStopEvent(session));
-        });
+        fireRecordingStopEvent(session);
 
         if (activeSessions.isEmpty() && tickTask != null) {
             tickTask.cancel();
             tickTask = null;
         }
         return true;
+    }
+
+    private void fireRecordingStopEvent(RecordingSession session) {
+        if (!replay.isEnabled()) {
+            // Paper disables scheduler registration before onDisable finishes, so fire directly during shutdown.
+            Bukkit.getPluginManager().callEvent(new RecordingStopEvent(session));
+            return;
+        }
+
+        replay.getFoliaLib().getScheduler().runNextTick(task ->
+                Bukkit.getPluginManager().callEvent(new RecordingStopEvent(session)));
     }
 
     private void tickAll() {

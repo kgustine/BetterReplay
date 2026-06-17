@@ -7,6 +7,7 @@ import com.github.retrooper.packetevents.event.EventManager;
 import com.tcoded.folialib.FoliaLib;
 import com.tcoded.folialib.impl.PlatformScheduler;
 import com.tcoded.folialib.wrapper.task.WrappedTask;
+import me.justindevb.replay.api.events.RecordingStopEvent;
 import me.justindevb.replay.recording.TimelineEvent;
 import me.justindevb.replay.storage.ReplaySaveRequest;
 import me.justindevb.replay.storage.ReplayStorage;
@@ -18,6 +19,7 @@ import org.bukkit.Location;
 import org.bukkit.World;
 import org.bukkit.entity.Player;
 import org.bukkit.entity.Pose;
+import org.bukkit.event.Event;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.PlayerInventory;
 import org.bukkit.plugin.PluginManager;
@@ -78,6 +80,7 @@ class RecorderManagerTest {
         when(plugin.getReplayStorage()).thenReturn(replayStorage);
         when(plugin.getReplayCache()).thenReturn(replayCache);
         when(plugin.getLogger()).thenReturn(Logger.getLogger("test"));
+        when(plugin.isEnabled()).thenReturn(true);
         when(replayStorage.listReplays()).thenReturn(CompletableFuture.completedFuture(List.of("recovered")));
         doReturn(CompletableFuture.completedFuture(null))
             .when(replayStorage)
@@ -184,6 +187,24 @@ class RecorderManagerTest {
     void stopSession_nonExistent_returnsFalse() {
         boolean result = manager.stopSession("nope", false);
         assertFalse(result);
+    }
+
+    @Test
+    void stopSession_whenPluginDisabled_firesStopEventWithoutScheduling() {
+        Player p = mock(Player.class);
+        when(p.getUniqueId()).thenReturn(UUID.randomUUID());
+
+        WrappedTask mockTask = mock(WrappedTask.class);
+        when(scheduler.runTimer(any(Runnable.class), anyLong(), anyLong())).thenReturn(mockTask);
+
+        manager.startSession("stop-test", List.of(p), -1);
+        when(plugin.isEnabled()).thenReturn(false);
+
+        boolean stopped = manager.stopSession("stop-test", false);
+
+        assertTrue(stopped);
+        verify(scheduler, never()).runNextTick(any());
+        verify(pluginManager).callEvent(argThat((Event event) -> event instanceof RecordingStopEvent));
     }
 
     @Test
