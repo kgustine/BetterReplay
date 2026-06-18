@@ -11,13 +11,19 @@ import me.justindevb.replay.util.io.ReplayCompressor;
 import javax.sql.DataSource;
 import java.io.*;
 import java.sql.*;
+import java.text.NumberFormat;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 public class MySQLReplayStorage implements ReplayStorage {
+
+    private static final Pattern PACKET_TOO_BIG_PATTERN = Pattern.compile("Packet for query is too large \\(([\\d,]+) > ([\\d,]+)\\)");
 
     private final DataSource dataSource;
     private final Replay replay;
@@ -132,9 +138,55 @@ public class MySQLReplayStorage implements ReplayStorage {
                 ps.executeUpdate();
 
             } catch (Exception e) {
+                logPacketTooBigWarning(name, e);
                 throw new RuntimeException(e);
             }
         });
+    }
+
+    private void logPacketTooBigWarning(String name, Throwable throwable) {
+        String packetMessage = findPacketTooBigMessage(throwable);
+        if (packetMessage == null) {
+            return;
+        }
+
+        Matcher matcher = PACKET_TOO_BIG_PATTERN.matcher(packetMessage);
+        if (!matcher.find()) {
+            replay.getLogger().warning("Failed to save replay '" + name + "': MySQL rejected the replay payload because it exceeded max_allowed_packet. "
+                    + "Increase the database max_allowed_packet limit or use file storage.");
+            return;
+        }
+
+        long replaySizeBytes = parsePacketSize(matcher.group(1));
+        long maxPacketBytes = parsePacketSize(matcher.group(2));
+        replay.getLogger().warning("Failed to save replay '" + name + "': replay archive size "
+                + formatByteSize(replaySizeBytes)
+                + " exceeds the MySQL max_allowed_packet limit of "
+                + formatByteSize(maxPacketBytes)
+                + ". Increase max_allowed_packet on the database server or use file storage.");
+    }
+
+    private String findPacketTooBigMessage(Throwable throwable) {
+        Throwable current = throwable;
+        while (current != null) {
+            String message = current.getMessage();
+            if (message != null && message.contains("Packet for query is too large")) {
+                return message;
+            }
+            current = current.getCause();
+        }
+        return null;
+    }
+
+    private long parsePacketSize(String value) {
+        return Long.parseLong(value.replace(",", ""));
+    }
+
+    private String formatByteSize(long bytes) {
+        return NumberFormat.getIntegerInstance(Locale.US).format(bytes)
+                + " bytes ("
+                + String.format(Locale.US, "%.2f MiB", bytes / (1024d * 1024d))
+                + ")";
     }
 
 

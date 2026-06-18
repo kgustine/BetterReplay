@@ -31,11 +31,15 @@ import java.nio.file.Files;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
+import java.sql.SQLException;
 import java.sql.Statement;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.logging.Handler;
+import java.util.logging.Level;
+import java.util.logging.LogRecord;
 import java.util.logging.Logger;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
@@ -84,6 +88,8 @@ class MySQLReplayStorageTest {
 
     private MySQLReplayStorage storage;
     private byte[] storedBytes;
+    private TestLogHandler logHandler;
+    private Logger logger;
 
     @BeforeEach
     void setUp() throws Exception {
@@ -92,7 +98,9 @@ class MySQLReplayStorageTest {
         when(pluginMeta.getVersion()).thenReturn(VersionUtil.MIN_RECORDING_VERSION);
         when(plugin.getFoliaLib()).thenReturn(foliaLib);
         when(foliaLib.getScheduler()).thenReturn(scheduler);
-        when(plugin.getLogger()).thenReturn(Logger.getLogger("MySQLReplayStorageTest"));
+        logHandler = new TestLogHandler();
+        logger = testLogger(logHandler);
+        when(plugin.getLogger()).thenReturn(logger);
 
         doAnswer(invocation -> {
             java.util.function.Consumer<WrappedTask> consumer = invocation.getArgument(0);
@@ -211,6 +219,19 @@ class MySQLReplayStorageTest {
         assertEquals(3, replayData.timeline().size());
         assertTrue(replayData.chunkData().hasChunkData());
         assertTrue(replayData.chunkData().regionEntries().containsKey("chunks/world/r.0.0.brregion"));
+    }
+
+    @Test
+    void saveReplay_whenMySqlPacketIsTooLarge_logsReplayAndLimitSizes() throws Exception {
+        when(saveStatement.executeUpdate()).thenThrow(new SQLException(
+                "Packet for query is too large (17,704,403 > 16,777,216). You can change this value on the server by setting the 'max_allowed_packet' variable."));
+
+        java.util.concurrent.CompletionException thrown = assertThrows(java.util.concurrent.CompletionException.class,
+                () -> storage.saveReplay("oversized", sampleTimeline()).join());
+
+        assertTrue(thrown.getCause() instanceof RuntimeException);
+        assertTrue(logHandler.contains(Level.WARNING,
+                "Failed to save replay 'oversized': replay archive size 17,704,403 bytes (16.88 MiB) exceeds the MySQL max_allowed_packet limit of 16,777,216 bytes (16.00 MiB)."));
     }
 
     @Test
@@ -396,5 +417,36 @@ class MySQLReplayStorageTest {
                 new TimelineEvent.BlockBreak(5, "uuid-1", "world", 10, 64, 20, "minecraft:stone"),
                 new TimelineEvent.PlayerQuit(10, "uuid-1")
         );
+    }
+
+    private static Logger testLogger(TestLogHandler handler) {
+        Logger logger = Logger.getLogger("MySQLReplayStorageTest." + System.nanoTime());
+        logger.setUseParentHandlers(false);
+        logger.setLevel(Level.ALL);
+        logger.addHandler(handler);
+        return logger;
+    }
+
+    private static final class TestLogHandler extends Handler {
+        private final java.util.List<LogRecord> records = new java.util.ArrayList<>();
+
+        @Override
+        public void publish(LogRecord record) {
+            records.add(record);
+        }
+
+        @Override
+        public void flush() {
+        }
+
+        @Override
+        public void close() {
+        }
+
+        boolean contains(Level level, String messageFragment) {
+            return records.stream().anyMatch(record -> record.getLevel().equals(level)
+                    && record.getMessage() != null
+                    && record.getMessage().contains(messageFragment));
+        }
     }
 }
