@@ -11,6 +11,7 @@ import me.justindevb.replay.api.RecordingTarget;
 import me.justindevb.replay.recording.inventory.SharedEquipmentCaptureCache;
 import me.justindevb.replay.recording.inventory.SharedStorageCaptureCache;
 import me.justindevb.replay.storage.ReplaySaveRequest;
+import me.justindevb.replay.storage.ReplayStoragePacketLimitException;
 import me.justindevb.replay.storage.binary.BinaryReplayAppendLogReader;
 import me.justindevb.replay.storage.binary.BinaryReplayAppendLogRecovery;
 import me.justindevb.replay.util.ReplayMessages;
@@ -246,6 +247,11 @@ public class RecorderManager implements Listener {
                     replay.getLogger().info("Recovered replay from temp log: " + replayName);
                 })
                 .exceptionally(ex -> {
+                    ReplayStoragePacketLimitException packetLimitException = ReplayStoragePacketLimitException.find(ex);
+                    if (packetLimitException != null) {
+                        replay.getLogger().warning("Failed to save recovered replay '" + replayName + "': " + packetLimitException.getMessage());
+                        return null;
+                    }
                     replay.getLogger().log(Level.SEVERE, "Failed to save recovered replay: " + replayName, ex);
                     return null;
                 });

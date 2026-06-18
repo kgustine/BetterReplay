@@ -39,6 +39,9 @@ import java.util.List;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.logging.Handler;
+import java.util.logging.Level;
+import java.util.logging.LogRecord;
 import java.util.logging.Logger;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -57,6 +60,8 @@ class RecorderManagerTest {
     private RecorderManager manager;
     private ReplayStorage replayStorage;
     private ReplayCache replayCache;
+    private TestLogHandler logHandler;
+    private Logger logger;
 
     @TempDir
     Path tempDir;
@@ -79,7 +84,9 @@ class RecorderManagerTest {
         when(plugin.getDataFolder()).thenReturn(tempDir.toFile());
         when(plugin.getReplayStorage()).thenReturn(replayStorage);
         when(plugin.getReplayCache()).thenReturn(replayCache);
-        when(plugin.getLogger()).thenReturn(Logger.getLogger("test"));
+        logHandler = new TestLogHandler();
+        logger = testLogger(logHandler);
+        when(plugin.getLogger()).thenReturn(logger);
         when(plugin.isEnabled()).thenReturn(true);
         when(replayStorage.listReplays()).thenReturn(CompletableFuture.completedFuture(List.of("recovered")));
         doReturn(CompletableFuture.completedFuture(null))
@@ -290,6 +297,24 @@ class RecorderManagerTest {
     }
 
     @Test
+    void recoverPendingAppendLogs_packetTooBigLogsWarningWithoutThrowable() throws Exception {
+        File appendLog = createAppendLog("oversized", true);
+        doReturn(CompletableFuture.failedFuture(new me.justindevb.replay.storage.ReplayStoragePacketLimitException(
+                "replay archive size 36.52 MiB exceeds the MySQL max_allowed_packet limit of 32.00 MiB. Increase max_allowed_packet on the database server or use file storage.",
+                null)))
+                .when(replayStorage)
+                .saveReplay(eq("oversized"), any(ReplaySaveRequest.class));
+
+        manager.recoverPendingAppendLogs().join();
+
+        assertTrue(appendLog.exists());
+        assertTrue(logHandler.contains(Level.WARNING,
+                "Failed to save recovered replay 'oversized': replay archive size 36.52 MiB exceeds the MySQL max_allowed_packet limit of 32.00 MiB."));
+        assertFalse(logHandler.hasThrown(Level.WARNING,
+                "Failed to save recovered replay 'oversized': replay archive size 36.52 MiB exceeds the MySQL max_allowed_packet limit of 32.00 MiB."));
+    }
+
+    @Test
     void tickAll_reusesEquipmentCaptureAcrossConcurrentSessions() {
         UUID playerUuid = UUID.randomUUID();
         Player player = mock(Player.class);
@@ -397,5 +422,43 @@ class RecorderManagerTest {
         }
 
         return appendLogPath.toFile();
+    }
+
+    private static Logger testLogger(TestLogHandler handler) {
+        Logger logger = Logger.getLogger("RecorderManagerTest." + System.nanoTime());
+        logger.setUseParentHandlers(false);
+        logger.setLevel(Level.ALL);
+        logger.addHandler(handler);
+        return logger;
+    }
+
+    private static final class TestLogHandler extends Handler {
+        private final java.util.List<LogRecord> records = new java.util.ArrayList<>();
+
+        @Override
+        public void publish(LogRecord record) {
+            records.add(record);
+        }
+
+        @Override
+        public void flush() {
+        }
+
+        @Override
+        public void close() {
+        }
+
+        boolean contains(Level level, String messageFragment) {
+            return records.stream().anyMatch(record -> record.getLevel().equals(level)
+                    && record.getMessage() != null
+                    && record.getMessage().contains(messageFragment));
+        }
+
+        boolean hasThrown(Level level, String messageFragment) {
+            return records.stream().anyMatch(record -> record.getLevel().equals(level)
+                    && record.getMessage() != null
+                    && record.getMessage().contains(messageFragment)
+                    && record.getThrown() != null);
+        }
     }
 }

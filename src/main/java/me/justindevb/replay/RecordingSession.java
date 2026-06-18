@@ -27,6 +27,7 @@ import me.justindevb.replay.recording.inventory.InventoryCaptureService.Captured
 import me.justindevb.replay.recording.inventory.SharedEquipmentCaptureCache;
 import me.justindevb.replay.recording.inventory.SharedStorageCaptureCache;
 import me.justindevb.replay.storage.ReplaySaveRequest;
+import me.justindevb.replay.storage.ReplayStoragePacketLimitException;
 import me.justindevb.replay.storage.binary.BinaryReplayAppendLogHeader;
 import me.justindevb.replay.storage.binary.BinaryReplayAppendLogRecovery;
 import me.justindevb.replay.storage.binary.BinaryReplayAppendLogReader;
@@ -340,6 +341,11 @@ public class RecordingSession {
                     replay.getLogger().info("Recording " + name + " saved!");
                 })
                 .exceptionally(ex -> {
+                    ReplayStoragePacketLimitException packetLimitException = ReplayStoragePacketLimitException.find(ex);
+                    if (packetLimitException != null) {
+                        replay.getLogger().warning("Failed to save recording '" + name + "': " + packetLimitException.getMessage());
+                        return null;
+                    }
                     replay.getLogger().log(java.util.logging.Level.SEVERE, "Failed to save recording: " + name, ex);
                     return null;
                 });
