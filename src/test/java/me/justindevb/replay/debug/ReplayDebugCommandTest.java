@@ -20,6 +20,7 @@ import java.nio.file.Files;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
+import java.util.logging.Level;
 import java.util.logging.Logger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -39,12 +40,13 @@ class ReplayDebugCommandTest {
     @Mock private FoliaLib foliaLib;
     @Mock private PlatformScheduler scheduler;
     @Mock private CommandSender sender;
+    @Mock private Logger logger;
 
     private ReplayDebugCommand command;
 
     @BeforeEach
     void setUp() {
-        command = new ReplayDebugCommand(replay, replayManager, foliaLib, Logger.getLogger("ReplayDebugCommandTest"));
+        command = new ReplayDebugCommand(replay, replayManager, foliaLib, logger);
     }
 
     @Test
@@ -135,12 +137,14 @@ class ReplayDebugCommandTest {
         }).when(scheduler).runNextTick(any());
         when(sender.hasPermission("replay.debug")).thenReturn(true);
         when(replay.getReplayStorage()).thenReturn(replayStorage);
+        IllegalStateException cause = new IllegalStateException("root cause message");
         when(replayStorage.getReplayInfo("demo replay")).thenReturn(CompletableFuture.failedFuture(
-                new CompletionException(new IllegalStateException("root cause message"))));
+                new CompletionException(cause)));
 
         boolean handled = command.handle(sender, new String[]{"debug", "info", "demo", "replay"});
 
         assertTrue(handled);
+        verify(logger).log(Level.SEVERE, "Replay info failed for demo replay", cause);
         verify(sender).sendMessage("§cReplay info failed: root cause message");
     }
 
