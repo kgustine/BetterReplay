@@ -16,6 +16,9 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.Set;
 
 public class MySQLReplayStorage implements ReplayStorage {
 
@@ -25,6 +28,7 @@ public class MySQLReplayStorage implements ReplayStorage {
     private final ReplayFormatDetector formatDetector;
     private final ReplayExporter replayExporter;
     private final ReplayDumpWriter replayDumpWriter;
+    private final Set<CompletableFuture<?>> pendingOperations = ConcurrentHashMap.newKeySet();
 
     public MySQLReplayStorage(DataSource dataSource, Replay replay) {
         this(dataSource, replay, new BinaryReplayStorageCodec(), defaultFormatDetector());
@@ -54,7 +58,7 @@ public class MySQLReplayStorage implements ReplayStorage {
     }
 
     private void init() {
-        replay.getFoliaLib().getScheduler().runAsync(task -> {
+        track(replay.getFoliaLib().getScheduler().runAsync(task -> {
             try (Connection conn = dataSource.getConnection();
                  Statement stmt = conn.createStatement()) {
 
@@ -77,7 +81,27 @@ public class MySQLReplayStorage implements ReplayStorage {
             } catch (SQLException e) {
                 replay.getLogger().log(java.util.logging.Level.SEVERE, "Failed to init replay table", e);
             }
-        });
+        }));
+    }
+
+    private <T> CompletableFuture<T> track(CompletableFuture<T> future) {
+        pendingOperations.add(future);
+        future.whenComplete((result, throwable) -> pendingOperations.remove(future));
+        return future;
+    }
+
+    public void awaitPendingOperations() {
+        CompletableFuture<?>[] futures = pendingOperations.toArray(new CompletableFuture[0]);
+        while (futures.length > 0) {
+            for (CompletableFuture<?> future : futures) {
+                try {
+                    future.join();
+                } catch (CompletionException ignored) {
+                    // Callers already handle and log storage failures on each operation.
+                }
+            }
+            futures = pendingOperations.toArray(new CompletableFuture[0]);
+        }
     }
 
     private void ensureColumnExists(Connection conn, Statement stmt, String columnName, String definition) throws SQLException {
@@ -117,7 +141,7 @@ public class MySQLReplayStorage implements ReplayStorage {
         if (invalidName.isPresent()) {
             return CompletableFuture.failedFuture(new IllegalArgumentException(invalidName.get()));
         }
-        return CompletableFuture.runAsync(() -> {
+        return track(CompletableFuture.runAsync(() -> {
             try (Connection conn = dataSource.getConnection();
                  PreparedStatement ps = conn.prepareStatement("""
                   INSERT INTO replays (name, data)
@@ -138,7 +162,7 @@ public class MySQLReplayStorage implements ReplayStorage {
                 }
                 throw new RuntimeException(e);
             }
-        });
+        }));
     }
 
 
@@ -152,7 +176,7 @@ public class MySQLReplayStorage implements ReplayStorage {
         if (!ReplayNames.isValidReplayName(name)) {
             return CompletableFuture.completedFuture(null);
         }
-        return CompletableFuture.supplyAsync(() -> {
+        return track(CompletableFuture.supplyAsync(() -> {
             try (Connection conn = dataSource.getConnection();
                  PreparedStatement ps = conn.prepareStatement(
                          "SELECT data FROM replays WHERE name=?"
@@ -170,7 +194,7 @@ public class MySQLReplayStorage implements ReplayStorage {
             } catch (Exception e) {
                 throw new RuntimeException("Failed to load replay: " + name, e);
             }
-        });
+        }));
     }
 
 
@@ -179,7 +203,7 @@ public class MySQLReplayStorage implements ReplayStorage {
         if (!ReplayNames.isValidReplayName(name)) {
             return CompletableFuture.completedFuture(false);
         }
-        return CompletableFuture.supplyAsync(() -> {
+        return track(CompletableFuture.supplyAsync(() -> {
             try (Connection conn = dataSource.getConnection();
                  PreparedStatement ps = conn.prepareStatement(
                          "SELECT 1 FROM replays WHERE name=? LIMIT 1"
@@ -195,7 +219,7 @@ public class MySQLReplayStorage implements ReplayStorage {
                 replay.getLogger().log(java.util.logging.Level.SEVERE, "Failed to check replay existence: " + name, e);
                 return false;
             }
-        });
+        }));
     }
 
 
@@ -204,7 +228,7 @@ public class MySQLReplayStorage implements ReplayStorage {
         if (!ReplayNames.isValidReplayName(name)) {
             return CompletableFuture.completedFuture(ReplayDeleteResult.NOT_FOUND);
         }
-        return CompletableFuture.supplyAsync(() -> {
+        return track(CompletableFuture.supplyAsync(() -> {
             try (Connection conn = dataSource.getConnection();
                  PreparedStatement ps = conn.prepareStatement(
                          "DELETE FROM replays WHERE name=?"
@@ -225,12 +249,12 @@ public class MySQLReplayStorage implements ReplayStorage {
             } catch (Exception e) {
                 throw new RuntimeException("Failed to delete replay: " + name, e);
             }
-        });
+        }));
     }
 
     @Override
     public CompletableFuture<List<ReplaySummary>> listReplaySummaries() {
-        return CompletableFuture.supplyAsync(() -> {
+        return track(CompletableFuture.supplyAsync(() -> {
             List<ReplaySummary> summaries = new ArrayList<>();
             try (Connection conn = dataSource.getConnection();
                  PreparedStatement ps = conn.prepareStatement(
@@ -256,7 +280,7 @@ public class MySQLReplayStorage implements ReplayStorage {
             } catch (Exception e) {
                 throw new RuntimeException("Failed to list replay summaries", e);
             }
-        });
+        }));
     }
 
     @Override
@@ -264,7 +288,7 @@ public class MySQLReplayStorage implements ReplayStorage {
         if (!ReplayNames.isValidReplayName(name)) {
             return CompletableFuture.completedFuture(ReplayProtectionResult.NOT_FOUND);
         }
-        return CompletableFuture.supplyAsync(() -> {
+        return track(CompletableFuture.supplyAsync(() -> {
             try (Connection conn = dataSource.getConnection()) {
                 Optional<Boolean> protectionState = getProtectionState(conn, name);
                 if (protectionState.isEmpty()) {
@@ -286,7 +310,7 @@ public class MySQLReplayStorage implements ReplayStorage {
             } catch (Exception e) {
                 throw new RuntimeException("Failed to protect replay: " + name, e);
             }
-        });
+        }));
     }
 
     @Override
@@ -294,7 +318,7 @@ public class MySQLReplayStorage implements ReplayStorage {
         if (!ReplayNames.isValidReplayName(name)) {
             return CompletableFuture.completedFuture(ReplayProtectionResult.NOT_FOUND);
         }
-        return CompletableFuture.supplyAsync(() -> {
+        return track(CompletableFuture.supplyAsync(() -> {
             try (Connection conn = dataSource.getConnection()) {
                 Optional<Boolean> protectionState = getProtectionState(conn, name);
                 if (protectionState.isEmpty()) {
@@ -314,13 +338,13 @@ public class MySQLReplayStorage implements ReplayStorage {
             } catch (Exception e) {
                 throw new RuntimeException("Failed to unprotect replay: " + name, e);
             }
-        });
+        }));
     }
 
 
     @Override
     public CompletableFuture<List<String>> listReplays() {
-        return CompletableFuture.supplyAsync(() -> {
+        return track(CompletableFuture.supplyAsync(() -> {
             List<String> names = new ArrayList<>();
             try (Connection conn = dataSource.getConnection();
                  PreparedStatement ps = conn.prepareStatement(
@@ -336,7 +360,7 @@ public class MySQLReplayStorage implements ReplayStorage {
             } catch (Exception e) {
                 throw new RuntimeException("Failed to list replays", e);
             }
-        });
+        }));
     }
 
     @Override
@@ -344,7 +368,7 @@ public class MySQLReplayStorage implements ReplayStorage {
         if (!ReplayNames.isValidReplayName(name)) {
             return CompletableFuture.completedFuture(null);
         }
-        return CompletableFuture.supplyAsync(() -> {
+        return track(CompletableFuture.supplyAsync(() -> {
             try (Connection conn = dataSource.getConnection();
                 PreparedStatement ps = conn.prepareStatement("SELECT data FROM replays WHERE name=?")) {
 
@@ -361,7 +385,7 @@ public class MySQLReplayStorage implements ReplayStorage {
                 replay.getLogger().log(java.util.logging.Level.SEVERE, "Failed to get replay file: " + name, e);
                 return null;
             }
-        });
+        }));
     }
 
     @Override
@@ -369,7 +393,7 @@ public class MySQLReplayStorage implements ReplayStorage {
         if (!ReplayNames.isValidReplayName(name)) {
             return CompletableFuture.completedFuture(null);
         }
-        return CompletableFuture.supplyAsync(() -> {
+        return track(CompletableFuture.supplyAsync(() -> {
             try (Connection conn = dataSource.getConnection();
                  PreparedStatement ps = conn.prepareStatement("SELECT data FROM replays WHERE name=?")) {
 
@@ -388,7 +412,7 @@ public class MySQLReplayStorage implements ReplayStorage {
                 replay.getLogger().log(java.util.logging.Level.SEVERE, "Failed to export replay file: " + name, e);
                 return null;
             }
-        });
+        }));
     }
 
     @Override
@@ -396,7 +420,7 @@ public class MySQLReplayStorage implements ReplayStorage {
         if (!ReplayNames.isValidReplayName(name)) {
             return CompletableFuture.completedFuture(null);
         }
-        return CompletableFuture.supplyAsync(() -> {
+        return track(CompletableFuture.supplyAsync(() -> {
             try (Connection conn = dataSource.getConnection();
                  PreparedStatement ps = conn.prepareStatement("SELECT data FROM replays WHERE name=?")) {
 
@@ -413,7 +437,7 @@ public class MySQLReplayStorage implements ReplayStorage {
             } catch (Exception e) {
                 throw new RuntimeException("Failed to inspect replay file: " + name, e);
             }
-        });
+        }));
     }
 
     @Override
@@ -421,7 +445,7 @@ public class MySQLReplayStorage implements ReplayStorage {
         if (!ReplayNames.isValidReplayName(name)) {
             return CompletableFuture.completedFuture(null);
         }
-        return CompletableFuture.supplyAsync(() -> {
+        return track(CompletableFuture.supplyAsync(() -> {
             try (Connection conn = dataSource.getConnection();
                  PreparedStatement ps = conn.prepareStatement("SELECT data FROM replays WHERE name=?")) {
 
@@ -438,6 +462,6 @@ public class MySQLReplayStorage implements ReplayStorage {
             } catch (Exception e) {
                 throw new RuntimeException("Failed to dump replay file: " + name, e);
             }
-        });
+        }));
     }
 }

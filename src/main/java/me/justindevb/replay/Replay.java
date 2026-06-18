@@ -136,6 +136,9 @@ public class Replay extends JavaPlugin {
         if (replayRetentionService != null)
             replayRetentionService.stop();
 
+        if (storage instanceof MySQLReplayStorage mySqlReplayStorage)
+            mySqlReplayStorage.awaitPendingOperations();
+
         if (connectionManager != null)
             connectionManager.shutdown();
 
