@@ -1,5 +1,7 @@
 package me.justindevb.replay.recording;
 
+import me.justindevb.replay.util.io.SerializedItemData;
+
 import java.util.List;
 
 /**
@@ -32,10 +34,13 @@ public sealed interface TimelineEvent {
 
     // ── Inventory ─────────────────────────────────────────────
 
-    record InventoryUpdate(int tick, String uuid, String mainHand, String offHand,
-                           List<String> armor, List<String> contents) implements TimelineEvent {}
+    record InventoryStorageUpdate(int tick, String uuid,
+                                  List<SerializedItemData> storage) implements TimelineEvent {}
 
-    record HeldItemChange(int tick, String uuid, String mainHand, String offHand) implements TimelineEvent {}
+    record EquipmentStateUpdate(int tick, String uuid, int heldSlot,
+                                SerializedItemData mainHand,
+                                SerializedItemData offHand,
+                                List<SerializedItemData> armor) implements TimelineEvent {}
 
     // ── Blocks ────────────────────────────────────────────────
 
@@ -65,7 +70,19 @@ public sealed interface TimelineEvent {
     record Swing(int tick, String uuid, String hand) implements TimelineEvent {}
 
     record Damaged(int tick, String uuid, String entityType, String cause,
-                   double finalDamage) implements TimelineEvent {}
+                   double finalDamage, double health, boolean critical) implements TimelineEvent {
+        public Damaged(int tick, String uuid, String entityType, String cause, double finalDamage) {
+            this(tick, uuid, entityType, cause, finalDamage, -1, false);
+        }
+    }
+
+    record HealthUpdate(int tick, String uuid, String entityType, double health) implements TimelineEvent {}
+
+    record SoundEffect(int tick, String uuid, String sound, String world,
+                       double x, double y, double z, float volume, float pitch) implements TimelineEvent {}
+
+    record SplashPotionImpact(int tick, String uuid, String world,
+                             double x, double y, double z, int color) implements TimelineEvent {}
 
     // ── State toggles ─────────────────────────────────────────
 
@@ -76,7 +93,12 @@ public sealed interface TimelineEvent {
     // ── Lifecycle ─────────────────────────────────────────────
 
     record EntitySpawn(int tick, String uuid, String etype, String world,
-                       double x, double y, double z) implements TimelineEvent {}
+                       double x, double y, double z, String item) implements TimelineEvent {
+        public EntitySpawn(int tick, String uuid, String etype, String world,
+                           double x, double y, double z) {
+            this(tick, uuid, etype, world, x, y, z, null);
+        }
+    }
 
     record EntityDeath(int tick, String uuid, String etype, String world,
                        double x, double y, double z) implements TimelineEvent {}

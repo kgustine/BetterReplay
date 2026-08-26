@@ -9,6 +9,7 @@ import me.justindevb.replay.util.ReplayCache;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.World;
+import org.bukkit.configuration.file.FileConfiguration;
 import org.bukkit.entity.Player;
 import org.bukkit.entity.Pose;
 import org.bukkit.inventory.ItemStack;
@@ -43,6 +44,7 @@ class RecordingSessionIntegrationTest {
     @Mock private PlayerInventory playerInventory;
     @Mock private ReplayStorage storage;
     @Mock private ReplayCache replayCache;
+    @Mock private FileConfiguration config;
 
     private UUID playerUuid;
 
@@ -50,6 +52,11 @@ class RecordingSessionIntegrationTest {
     void setUp() {
         playerUuid = UUID.randomUUID();
         when(player.getUniqueId()).thenReturn(playerUuid);
+        when(plugin.getConfig()).thenReturn(config);
+        when(config.getBoolean("Recording.Chunk-Capture.Enabled", false)).thenReturn(false);
+        when(config.getInt("Recording.Chunk-Capture.Radius", 1)).thenReturn(1);
+        when(config.getInt("Recording.Chunk-Capture.Capture-Interval-Ticks", 20)).thenReturn(20);
+        when(config.getInt("Recording.Chunk-Capture.Max-Unique-Chunks-Per-Recording", 20000)).thenReturn(20_000);
     }
 
     private RecordingSession createSession(int durationSeconds) {
@@ -59,11 +66,15 @@ class RecordingSessionIntegrationTest {
 
     @Test
     void constructor_setsFields() {
-        RecordingSession s = createSession(30);
-        assertEquals(0, s.getTick());
-        assertFalse(s.isStopped());
-        assertTrue(s.getTrackedPlayers().contains(playerUuid));
-        assertTrue(s.isTrackedPlayer(playerUuid));
+        try (MockedStatic<Replay> replayStatic = mockStatic(Replay.class)) {
+            replayStatic.when(Replay::getInstance).thenReturn(plugin);
+
+            RecordingSession s = createSession(30);
+            assertEquals(0, s.getTick());
+            assertFalse(s.isStopped());
+            assertTrue(s.getTrackedPlayers().contains(playerUuid));
+            assertTrue(s.isTrackedPlayer(playerUuid));
+        }
     }
 
     @Test
@@ -120,7 +131,7 @@ class RecordingSessionIntegrationTest {
             List<TimelineEvent> timeline = s.getTimeline();
             assertFalse(timeline.isEmpty());
 
-            // First event should be a PlayerMove (or InventoryUpdate at tick 0)
+            // First event should be a PlayerMove or an initial inventory/equipment event at tick 0.
             boolean hasPlayerMove = timeline.stream()
                     .anyMatch(e -> e instanceof TimelineEvent.PlayerMove);
             assertTrue(hasPlayerMove);
@@ -245,7 +256,8 @@ class RecordingSessionIntegrationTest {
             pe.when(PacketEvents::getAPI).thenReturn(api);
             when(api.getEventManager()).thenReturn(eventManager);
 
-            when(storage.saveReplay(anyString(), anyList())).thenReturn(CompletableFuture.completedFuture(null));
+                when(storage.saveReplay(anyString(), org.mockito.ArgumentMatchers.any(me.justindevb.replay.storage.ReplaySaveRequest.class)))
+                    .thenReturn(CompletableFuture.completedFuture(null));
             when(storage.listReplays()).thenReturn(CompletableFuture.completedFuture(List.of()));
 
             bukkit.when(() -> Bukkit.getPlayer(playerUuid)).thenReturn(player);
@@ -302,9 +314,88 @@ class RecordingSessionIntegrationTest {
             // Check that inventory updates were recorded (at tick 0; subsequent checks
             // may skip if inventory is unchanged between intervals)
             long invCount = s.getTimeline().stream()
-                    .filter(e -> e instanceof TimelineEvent.InventoryUpdate)
+                    .filter(e -> e instanceof TimelineEvent.InventoryStorageUpdate)
                     .count();
             assertTrue(invCount >= 1, "Expected at least 1 inventory update in 10 ticks, got " + invCount);
+        }
+    }
+
+    @Test
+    void equipmentCheck_skipsCleanPlayersUntilFallbackSweep() {
+        try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class);
+             MockedStatic<Replay> replayStatic = mockStatic(Replay.class)) {
+
+            replayStatic.when(Replay::getInstance).thenReturn(plugin);
+            bukkit.when(() -> Bukkit.getPlayer(playerUuid)).thenReturn(player);
+
+            ItemStack mainHand = mock(ItemStack.class);
+            when(mainHand.isEmpty()).thenReturn(false);
+            when(mainHand.serializeAsBytes()).thenReturn(new byte[]{1});
+
+            when(player.isOnline()).thenReturn(true);
+            when(player.getLocation()).thenReturn(new Location(world, 0, 64, 0, 0, 0));
+            when(player.getPose()).thenReturn(Pose.STANDING);
+            when(player.getName()).thenReturn("TestPlayer");
+            when(world.getName()).thenReturn("world");
+            when(player.getWorld()).thenReturn(world);
+            when(player.getInventory()).thenReturn(playerInventory);
+            when(playerInventory.getStorageContents()).thenReturn(new ItemStack[36]);
+            when(playerInventory.getItemInMainHand()).thenReturn(mainHand);
+            when(playerInventory.getItemInOffHand()).thenReturn(null);
+            when(playerInventory.getHeldItemSlot()).thenReturn(0);
+
+            RecordingSession s = createSession(-1);
+
+            s.tick();
+            clearInvocations(mainHand);
+
+            for (int i = 0; i < 19; i++) {
+                s.tick();
+            }
+
+            verify(mainHand, never()).serializeAsBytes();
+
+            s.tick();
+
+            verify(mainHand, times(1)).serializeAsBytes();
+        }
+    }
+
+    @Test
+    void cleanInventorySweep_bypassesSharedStorageCache() {
+        try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class);
+             MockedStatic<Replay> replayStatic = mockStatic(Replay.class)) {
+
+            replayStatic.when(Replay::getInstance).thenReturn(plugin);
+            bukkit.when(() -> Bukkit.getPlayer(playerUuid)).thenReturn(player);
+
+            ItemStack storageItem = mock(ItemStack.class);
+            when(storageItem.isEmpty()).thenReturn(false);
+            when(storageItem.serializeAsBytes()).thenReturn(new byte[]{2});
+
+            ItemStack[] storageContents = new ItemStack[36];
+            storageContents[0] = storageItem;
+
+            when(player.isOnline()).thenReturn(true);
+            when(player.getLocation()).thenReturn(new Location(world, 0, 64, 0, 0, 0));
+            when(player.getPose()).thenReturn(Pose.STANDING);
+            when(player.getName()).thenReturn("TestPlayer");
+            when(world.getName()).thenReturn("world");
+            when(player.getWorld()).thenReturn(world);
+            when(player.getInventory()).thenReturn(playerInventory);
+            when(playerInventory.getStorageContents()).thenReturn(storageContents);
+            when(playerInventory.getItemInMainHand()).thenReturn(null);
+            when(playerInventory.getItemInOffHand()).thenReturn(null);
+            when(playerInventory.getHeldItemSlot()).thenReturn(0);
+
+            RecordingSession s = createSession(-1);
+            clearInvocations(storageItem);
+
+            for (int i = 0; i < 20; i++) {
+                s.tick();
+            }
+
+            verify(storageItem, times(1)).serializeAsBytes();
         }
     }
 }

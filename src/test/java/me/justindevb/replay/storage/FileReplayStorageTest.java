@@ -1,8 +1,10 @@
 package me.justindevb.replay.storage;
 
 import me.justindevb.replay.Replay;
+import me.justindevb.replay.api.ReplayExportQuery;
 import me.justindevb.replay.recording.TimelineEvent;
-import org.bukkit.configuration.file.FileConfiguration;
+import me.justindevb.replay.storage.binary.BinaryReplayStorageCodec;
+import me.justindevb.replay.util.VersionUtil;
 import io.papermc.paper.plugin.configuration.PluginMeta;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
@@ -17,7 +19,9 @@ import org.mockito.quality.Strictness;
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
+import java.time.Instant;
 import java.util.List;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.ExecutionException;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -28,7 +32,6 @@ import static org.mockito.Mockito.*;
 class FileReplayStorageTest {
 
     @Mock private Replay plugin;
-    @Mock private FileConfiguration config;
     @Mock private PluginMeta pluginMeta;
 
     @TempDir
@@ -39,9 +42,8 @@ class FileReplayStorageTest {
     @BeforeEach
     void setUp() {
         when(plugin.getDataFolder()).thenReturn(tempDir);
-        when(plugin.getConfig()).thenReturn(config);
         when(plugin.getPluginMeta()).thenReturn(pluginMeta);
-        when(pluginMeta.getVersion()).thenReturn("1.4.0");
+        when(pluginMeta.getVersion()).thenReturn(VersionUtil.MIN_RECORDING_VERSION);
         storage = new FileReplayStorage(plugin);
     }
 
@@ -53,14 +55,10 @@ class FileReplayStorageTest {
         );
     }
 
-    // ── Compressed roundtrip ──────────────────────────────────
+    // ── Binary roundtrip ──────────────────────────────────────
 
     @Nested
-    class CompressedMode {
-        @BeforeEach
-        void enableCompression() {
-            when(config.getBoolean("General.Compress-Replays", true)).thenReturn(true);
-        }
+    class BinaryMode {
 
         @Test
         void saveAndLoad_roundtrip() throws ExecutionException, InterruptedException {
@@ -81,7 +79,7 @@ class FileReplayStorageTest {
             storage.saveReplay("compressed", sampleTimeline()).get();
 
             File replayDir = new File(tempDir, "replays");
-            File compressed = new File(replayDir, "compressed.json.gz");
+            File compressed = new File(replayDir, "compressed.br");
             assertTrue(compressed.exists());
 
             File plain = new File(replayDir, "compressed.json");
@@ -89,28 +87,33 @@ class FileReplayStorageTest {
         }
 
         @Test
-        void save_removesLegacyUncompressed() throws ExecutionException, InterruptedException, IOException {
-            File replayDir = new File(tempDir, "replays");
-            replayDir.mkdirs();
-            File legacy = new File(replayDir, "migration.json");
-            Files.writeString(legacy.toPath(), "[]");
+    void save_removesLegacyUncompressed() throws ExecutionException, InterruptedException, IOException {
+        File replayDir = new File(tempDir, "replays");
+        replayDir.mkdirs();
+        File legacy = new File(replayDir, "migration.json");
+        Files.writeString(legacy.toPath(), "[]");
             assertTrue(legacy.exists());
 
             storage.saveReplay("migration", sampleTimeline()).get();
 
             assertFalse(legacy.exists());
-            assertTrue(new File(replayDir, "migration.json.gz").exists());
+            assertTrue(new File(replayDir, "migration.br").exists());
+        }
+
+        @Test
+        void save_withInvalidReplayName_failsFast() {
+            CompletionException thrown = assertThrows(CompletionException.class,
+                    () -> storage.saveReplay("bad/name", sampleTimeline()).join());
+
+            assertInstanceOf(IllegalArgumentException.class, thrown.getCause());
+            assertEquals("Replay names may not contain any of \\ / : * ? \" < > | or §", thrown.getCause().getMessage());
         }
     }
 
-    // ── Uncompressed roundtrip ────────────────────────────────
+    // ── Stable save format ────────────────────────────────────
 
     @Nested
-    class UncompressedMode {
-        @BeforeEach
-        void disableCompression() {
-            when(config.getBoolean("General.Compress-Replays", true)).thenReturn(false);
-        }
+    class StableSaveFormat {
 
         @Test
         void saveAndLoad_roundtrip() throws ExecutionException, InterruptedException {
@@ -123,12 +126,13 @@ class FileReplayStorageTest {
         }
 
         @Test
-        void savedFile_hasJsonExtension() throws ExecutionException, InterruptedException {
+        void savedFile_hasBinaryExtension() throws ExecutionException, InterruptedException {
             storage.saveReplay("plainfile", sampleTimeline()).get();
 
             File replayDir = new File(tempDir, "replays");
-            assertTrue(new File(replayDir, "plainfile.json").exists());
+            assertTrue(new File(replayDir, "plainfile.br").exists());
             assertFalse(new File(replayDir, "plainfile.json.gz").exists());
+            assertFalse(new File(replayDir, "plainfile.json").exists());
         }
     }
 
@@ -136,10 +140,7 @@ class FileReplayStorageTest {
 
     @Test
     void listReplays_bothExtensions() throws ExecutionException, InterruptedException, IOException {
-        when(config.getBoolean("General.Compress-Replays", true)).thenReturn(true);
         storage.saveReplay("compressed1", sampleTimeline()).get();
-
-        when(config.getBoolean("General.Compress-Replays", true)).thenReturn(false);
         storage.saveReplay("uncompressed1", sampleTimeline()).get();
 
         List<String> names = storage.listReplays().get();
@@ -157,24 +158,89 @@ class FileReplayStorageTest {
 
     @Test
     void deleteReplay_existing_returnsTrue() throws ExecutionException, InterruptedException {
-        when(config.getBoolean("General.Compress-Replays", true)).thenReturn(true);
         storage.saveReplay("todelete", sampleTimeline()).get();
 
-        assertTrue(storage.deleteReplay("todelete").get());
+        assertEquals(ReplayDeleteResult.DELETED, storage.deleteReplay("todelete").get());
 
         assertNull(storage.loadReplay("todelete").get());
     }
 
     @Test
     void deleteReplay_nonExistent_returnsFalse() throws ExecutionException, InterruptedException {
-        assertFalse(storage.deleteReplay("nope").get());
+        assertEquals(ReplayDeleteResult.NOT_FOUND, storage.deleteReplay("nope").get());
+    }
+
+    @Test
+    void protectReplay_existing_writesMetadataFile() throws Exception {
+        storage.saveReplay("protected-demo", sampleTimeline()).get();
+
+        ReplayProtectionResult result = storage.protectReplay("protected-demo", Instant.parse("2026-04-29T17:00:00Z"), "console").get();
+
+        assertEquals(ReplayProtectionResult.UPDATED, result);
+        File metadataFile = new File(tempDir, "replays-meta/protected-demo.json");
+        assertTrue(metadataFile.isFile());
+        String metadataJson = Files.readString(metadataFile.toPath());
+        assertTrue(metadataJson.contains("\"protectedFromDeletion\": true"));
+        assertTrue(metadataJson.contains("\"protectedAt\": \"2026-04-29T17:00:00Z\""));
+        assertTrue(metadataJson.contains("\"protectedBy\": \"console\""));
+    }
+
+    @Test
+    void deleteReplay_protected_returnsProtected() throws Exception {
+        storage.saveReplay("protected-delete", sampleTimeline()).get();
+        storage.protectReplay("protected-delete", Instant.parse("2026-04-29T17:00:00Z"), "console").get();
+
+        assertEquals(ReplayDeleteResult.PROTECTED, storage.deleteReplay("protected-delete").get());
+        assertNotNull(storage.loadReplay("protected-delete").get());
+    }
+
+    @Test
+    void unprotectReplay_preservesAuditFields() throws Exception {
+        storage.saveReplay("preserve-audit", sampleTimeline()).get();
+        storage.protectReplay("preserve-audit", Instant.parse("2026-04-29T17:00:00Z"), "console").get();
+
+        ReplayProtectionResult result = storage.unprotectReplay("preserve-audit").get();
+        ReplaySummary summary = storage.listReplaySummaries().get().stream()
+                .filter(item -> item.name().equals("preserve-audit"))
+                .findFirst()
+                .orElseThrow();
+
+        assertEquals(ReplayProtectionResult.UPDATED, result);
+        assertFalse(summary.protectedFromDeletion());
+        assertEquals(Instant.parse("2026-04-29T17:00:00Z"), summary.protectedAt());
+        assertEquals("console", summary.protectedBy());
+    }
+
+    @Test
+    void deleteReplay_removesMetadataAfterReplayDeletion() throws Exception {
+        storage.saveReplay("delete-metadata", sampleTimeline()).get();
+        storage.protectReplay("delete-metadata", Instant.parse("2026-04-29T17:00:00Z"), "console").get();
+        storage.unprotectReplay("delete-metadata").get();
+
+        assertEquals(ReplayDeleteResult.DELETED, storage.deleteReplay("delete-metadata").get());
+        assertFalse(new File(tempDir, "replays-meta/delete-metadata.json").exists());
+    }
+
+    @Test
+    void listReplaySummaries_includesProtectionFields() throws Exception {
+        storage.saveReplay("summary-protected", sampleTimeline()).get();
+        storage.protectReplay("summary-protected", Instant.parse("2026-04-29T17:00:00Z"), "console").get();
+
+        ReplaySummary summary = storage.listReplaySummaries().get().stream()
+                .filter(item -> item.name().equals("summary-protected"))
+                .findFirst()
+                .orElseThrow();
+
+        assertTrue(summary.protectedFromDeletion());
+        assertEquals(Instant.parse("2026-04-29T17:00:00Z"), summary.protectedAt());
+        assertEquals("console", summary.protectedBy());
+        assertEquals(ReplayStorageType.FILE, summary.storageType());
     }
 
     // ── replayExists ──────────────────────────────────────────
 
     @Test
     void replayExists_true() throws ExecutionException, InterruptedException {
-        when(config.getBoolean("General.Compress-Replays", true)).thenReturn(true);
         storage.saveReplay("exists", sampleTimeline()).get();
 
         assertTrue(storage.replayExists("exists").get());
@@ -189,7 +255,6 @@ class FileReplayStorageTest {
 
     @Test
     void getReplayFile_existing() throws ExecutionException, InterruptedException {
-        when(config.getBoolean("General.Compress-Replays", true)).thenReturn(true);
         storage.saveReplay("filereq", sampleTimeline()).get();
 
         File file = storage.getReplayFile("filereq").get();
@@ -203,6 +268,37 @@ class FileReplayStorageTest {
         assertNull(storage.getReplayFile("nope").get());
     }
 
+    @Test
+    void getReplayInfo_returnsTimestampCountsAndSizes() throws Exception {
+        storage.saveReplay("info", new ReplaySaveRequest(sampleTimeline(), 123456789L)).get();
+
+        ReplayInspection info = storage.getReplayInfo("info").get();
+
+        assertNotNull(info);
+        assertEquals(3, info.recordCount());
+        assertEquals(0, info.startTick());
+        assertEquals(10, info.endTick());
+        assertEquals(10, info.durationTicks());
+        assertEquals(123456789L, info.recordingStartedAtEpochMillis());
+        assertTrue(info.storedBytes() > 0);
+        assertTrue(info.compressedPayloadBytes() > 0);
+        assertTrue(info.decompressedPayloadBytes() > info.compressedPayloadBytes());
+        assertTrue(info.indexedPayload());
+    }
+
+    @Test
+    void getReplayDumpFile_writesBoundedHumanReadableFile() throws Exception {
+        storage.saveReplay("dumped", sampleTimeline()).get();
+
+        File dumped = storage.getReplayDumpFile("dumped", new me.justindevb.replay.debug.ReplayDumpQuery(5, 10)).get();
+        String dumpText = Files.readString(dumped.toPath());
+
+        assertEquals(new File(tempDir, "dumps").getCanonicalFile(), dumped.getParentFile().getCanonicalFile());
+        assertTrue(dumpText.contains("[tick=5]"));
+        assertTrue(dumpText.contains("[tick=10]"));
+        assertFalse(dumpText.contains("[tick=0]"));
+    }
+
     // ── loadReplay ────────────────────────────────────────────
 
     @Test
@@ -213,14 +309,103 @@ class FileReplayStorageTest {
     // ── Cross-format loading ──────────────────────────────────
 
     @Test
-    void canLoadCompressedAfterSavingCompressed() throws ExecutionException, InterruptedException {
-        when(config.getBoolean("General.Compress-Replays", true)).thenReturn(true);
+    void canLoadBinaryArchiveAfterSavingBinaryArchive() throws ExecutionException, InterruptedException {
         storage.saveReplay("crossformat", sampleTimeline()).get();
 
-        // Even with compression toggled off, should still load compressed files
-        when(config.getBoolean("General.Compress-Replays", true)).thenReturn(false);
         List<TimelineEvent> loaded = storage.loadReplay("crossformat").get();
         assertNotNull(loaded);
         assertEquals(3, loaded.size());
+    }
+
+    @Test
+    void keepsLegacyJsonLoadCompatibilityAlongsideBinarySaves() throws Exception {
+        File replayDir = new File(tempDir, "replays");
+        replayDir.mkdirs();
+        byte[] legacyJson = new JsonReplayStorageCodec().encodeTimeline(sampleTimeline(), VersionUtil.MIN_RECORDING_VERSION);
+        Files.write(new File(replayDir, "legacy.json").toPath(), legacyJson);
+
+        storage.saveReplay("binary-save", sampleTimeline()).get();
+
+        List<TimelineEvent> legacyLoaded = storage.loadReplay("legacy").get();
+        List<TimelineEvent> binaryLoaded = storage.loadReplay("binary-save").get();
+
+        assertNotNull(legacyLoaded);
+        assertEquals(3, legacyLoaded.size());
+        assertNotNull(binaryLoaded);
+        assertEquals(3, binaryLoaded.size());
+        assertTrue(new File(replayDir, "binary-save.br").exists());
+    }
+
+    @Test
+    void prefersBinaryArchiveWhenLegacyJsonAndBrBothExist() throws Exception {
+        File replayDir = new File(tempDir, "replays");
+        replayDir.mkdirs();
+
+        byte[] legacyJson = new JsonReplayStorageCodec().encodeTimeline(List.of(new TimelineEvent.PlayerQuit(0, "legacy")), VersionUtil.MIN_RECORDING_VERSION);
+        Files.write(new File(replayDir, "mixed.json").toPath(), legacyJson);
+
+        byte[] archive = new BinaryReplayStorageCodec().finalizeReplay("mixed", sampleTimeline(), VersionUtil.MIN_RECORDING_VERSION);
+        Files.write(new File(replayDir, "mixed.br").toPath(), archive);
+
+        List<TimelineEvent> loaded = storage.loadReplay("mixed").get();
+
+        assertNotNull(loaded);
+        assertEquals(3, loaded.size());
+        assertEquals("uuid-1", loaded.get(0).uuid());
+    }
+
+    @Test
+    void listsMixedLegacyAndBinaryReplayOnlyOnce() throws Exception {
+        File replayDir = new File(tempDir, "replays");
+        replayDir.mkdirs();
+
+        byte[] legacyJson = new JsonReplayStorageCodec().encodeTimeline(List.of(new TimelineEvent.PlayerQuit(0, "legacy")), VersionUtil.MIN_RECORDING_VERSION);
+        Files.write(new File(replayDir, "mixed.json").toPath(), legacyJson);
+
+        byte[] archive = new BinaryReplayStorageCodec().finalizeReplay("mixed", sampleTimeline(), VersionUtil.MIN_RECORDING_VERSION);
+        Files.write(new File(replayDir, "mixed.br").toPath(), archive);
+
+        List<String> names = storage.listReplays().get();
+
+        assertEquals(1, names.stream().filter("mixed"::equals).count());
+    }
+
+    @Test
+    void exportMatchesBinaryArchiveStoredOnDisk() throws Exception {
+        storage.saveReplay("export-eq", sampleTimeline()).get();
+
+        File replayDir = new File(tempDir, "replays");
+        byte[] storedBytes = Files.readAllBytes(new File(replayDir, "export-eq.br").toPath());
+        File exported = storage.getReplayFile("export-eq").get();
+
+        assertNotNull(exported);
+        assertArrayEquals(storedBytes, Files.readAllBytes(exported.toPath()));
+    }
+
+    @Test
+    void filteredExportWritesBoundedBinaryArchive() throws Exception {
+        storage.saveReplay("filtered", sampleTimeline()).get();
+
+        File exported = storage.getReplayFile("filtered", new ReplayExportQuery(null, 5, 10)).get();
+        assertEquals(new File(tempDir, "exports").getCanonicalFile(), exported.getParentFile().getCanonicalFile());
+        List<TimelineEvent> filtered = new BinaryReplayStorageCodec().decodeTimeline(Files.readAllBytes(exported.toPath()), VersionUtil.MIN_RECORDING_VERSION);
+
+        assertEquals(2, filtered.size());
+        assertEquals(5, filtered.get(0).tick());
+        assertEquals(10, filtered.get(1).tick());
+    }
+
+    @Test
+    void canLoadBinaryArchiveByReplayName() throws Exception {
+        File replayDir = new File(tempDir, "replays");
+        replayDir.mkdirs();
+        byte[] archive = new BinaryReplayStorageCodec().finalizeReplay("binary", sampleTimeline(), VersionUtil.MIN_RECORDING_VERSION);
+        Files.write(new File(replayDir, "binary.br").toPath(), archive);
+
+        List<TimelineEvent> loaded = storage.loadReplay("binary").get();
+
+        assertNotNull(loaded);
+        assertEquals(3, loaded.size());
+        assertTrue(storage.listReplays().get().contains("binary"));
     }
 }

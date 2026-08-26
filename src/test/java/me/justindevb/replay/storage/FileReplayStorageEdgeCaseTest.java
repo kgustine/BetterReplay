@@ -1,8 +1,13 @@
 package me.justindevb.replay.storage;
 
 import me.justindevb.replay.Replay;
+import me.justindevb.replay.api.ReplayExportQuery;
+import me.justindevb.replay.chunk.CapturedChunkBaseline;
+import me.justindevb.replay.chunk.ChunkCoordinate;
 import me.justindevb.replay.recording.TimelineEvent;
-import org.bukkit.configuration.file.FileConfiguration;
+import me.justindevb.replay.storage.binary.BinaryChunkTempRegionFileWriter;
+import me.justindevb.replay.storage.binary.BinaryReplayStorageCodec;
+import me.justindevb.replay.util.VersionUtil;
 import io.papermc.paper.plugin.configuration.PluginMeta;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
@@ -33,12 +38,8 @@ class FileReplayStorageEdgeCaseTest {
         replay = mock(Replay.class);
         when(replay.getDataFolder()).thenReturn(tempDir);
 
-        FileConfiguration config = mock(FileConfiguration.class);
-        when(config.getBoolean("General.Compress-Replays", true)).thenReturn(true);
-        when(replay.getConfig()).thenReturn(config);
-
         PluginMeta meta = mock(PluginMeta.class);
-        when(meta.getVersion()).thenReturn("1.4.0");
+        when(meta.getVersion()).thenReturn(VersionUtil.MIN_RECORDING_VERSION);
         when(replay.getPluginMeta()).thenReturn(meta);
 
         storage = new FileReplayStorage(replay);
@@ -135,7 +136,7 @@ class FileReplayStorageEdgeCaseTest {
 
         @Test
         void deleteReplay_nonExistent_returnsFalse() throws Exception {
-            assertFalse(storage.deleteReplay("does-not-exist").get());
+            assertEquals(ReplayDeleteResult.NOT_FOUND, storage.deleteReplay("does-not-exist").get());
         }
 
         @Test
@@ -169,58 +170,94 @@ class FileReplayStorageEdgeCaseTest {
             assertNotNull(loaded);
             assertEquals(2, loaded.size());
         }
-    }
-
-    // ── Compression toggle ────────────────────────────────────
-
-    @Nested
-    class CompressionToggle {
 
         @Test
-        void switchFromCompressedToUncompressed_removesGzFile() throws Exception {
-            // Save as compressed
-            storage.saveReplay("toggle-test", List.of(new TimelineEvent.PlayerQuit(0, "u"))).get();
-            File gzFile = new File(new File(tempDir, "replays"), "toggle-test.json.gz");
-            assertTrue(gzFile.exists());
+        void listReplaySummaries_withoutMetadata_defaultsToUnprotected() throws Exception {
+            storage.saveReplay("summary-default", List.of(new TimelineEvent.PlayerQuit(0, "u1"))).get();
 
-            // Toggle compression off
-            when(replay.getConfig().getBoolean("General.Compress-Replays", true)).thenReturn(false);
+            ReplaySummary summary = storage.listReplaySummaries().get().stream()
+                    .filter(item -> item.name().equals("summary-default"))
+                    .findFirst()
+                    .orElseThrow();
+
+            assertFalse(summary.protectedFromDeletion());
+            assertNull(summary.protectedAt());
+            assertNull(summary.protectedBy());
+        }
+    }
+
+    // ── Stable binary save format ─────────────────────────────
+
+    @Nested
+    class StableBinaryFormat {
+
+        @Test
+        void repeatedSave_keepsBinaryArchivePathStable() throws Exception {
+            storage.saveReplay("toggle-test", List.of(new TimelineEvent.PlayerQuit(0, "u"))).get();
+            File archiveFile = new File(new File(tempDir, "replays"), "toggle-test.br");
+            assertTrue(archiveFile.exists());
 
             storage.saveReplay("toggle-test", List.of(new TimelineEvent.PlayerQuit(1, "u"))).get();
 
-            File jsonFile = new File(new File(tempDir, "replays"), "toggle-test.json");
-            assertTrue(jsonFile.exists(), "Uncompressed file should exist");
-            assertFalse(gzFile.exists(), "Old compressed file should be removed");
+            assertTrue(archiveFile.exists(), "Binary archive path should remain stable across saves");
+            assertFalse(new File(new File(tempDir, "replays"), "toggle-test.json").exists());
+            assertFalse(new File(new File(tempDir, "replays"), "toggle-test.json.gz").exists());
         }
 
         @Test
-        void switchFromUncompressedToCompressed_removesJsonFile() throws Exception {
-            when(replay.getConfig().getBoolean("General.Compress-Replays", true)).thenReturn(false);
+        void saveReplay_neverCreatesLegacyJsonVariants() throws Exception {
             storage.saveReplay("toggle2", List.of(new TimelineEvent.PlayerQuit(0, "u"))).get();
 
-            File jsonFile = new File(new File(tempDir, "replays"), "toggle2.json");
-            assertTrue(jsonFile.exists());
-
-            // Toggle compression on
-            when(replay.getConfig().getBoolean("General.Compress-Replays", true)).thenReturn(true);
-            storage.saveReplay("toggle2", List.of(new TimelineEvent.PlayerQuit(1, "u"))).get();
-
-            File gzFile = new File(new File(tempDir, "replays"), "toggle2.json.gz");
-            assertTrue(gzFile.exists(), "Compressed file should exist");
-            assertFalse(jsonFile.exists(), "Old uncompressed file should be removed");
+            assertTrue(new File(new File(tempDir, "replays"), "toggle2.br").exists());
+            assertFalse(new File(new File(tempDir, "replays"), "toggle2.json").exists());
+            assertFalse(new File(new File(tempDir, "replays"), "toggle2.json.gz").exists());
         }
 
         @Test
-        void loadReplay_autoDetects_regardlessOfCurrentSetting() throws Exception {
-            // Save compressed
+        void loadReplay_autoDetectsWithoutConfigToggle() throws Exception {
             storage.saveReplay("autodetect", List.of(new TimelineEvent.PlayerQuit(0, "u"))).get();
-
-            // Switch to uncompressed mode, but load should still work via auto-detect
-            when(replay.getConfig().getBoolean("General.Compress-Replays", true)).thenReturn(false);
 
             List<TimelineEvent> loaded = storage.loadReplay("autodetect").get();
             assertNotNull(loaded);
             assertEquals(1, loaded.size());
+        }
+
+        @Test
+        void saveReplay_withChunkArtifacts_roundTripsChunkPlaybackData() throws Exception {
+            try (BinaryChunkTempRegionFileWriter writer = new BinaryChunkTempRegionFileWriter(tempDir.toPath().resolve("chunk-artifacts"))) {
+                writer.append(new CapturedChunkBaseline(new ChunkCoordinate("world", 0, 0), new byte[] { 'B', 'R', 'C', 'S', 1 }));
+
+                storage.saveReplay("chunk-file", new ReplaySaveRequest(
+                        List.of(new TimelineEvent.PlayerQuit(0, "u")),
+                        1_700_000_000_000L,
+                        writer.snapshotArtifacts())).get();
+            }
+
+            ReplayPlaybackData replayData = storage.loadReplayData("chunk-file").get();
+
+            assertNotNull(replayData);
+            assertEquals(1, replayData.timeline().size());
+            assertTrue(replayData.chunkData().hasChunkData());
+            assertTrue(replayData.chunkData().regionEntries().containsKey("chunks/world/r.0.0.brregion"));
+        }
+
+        @Test
+        void getReplayFile_withPlayerFilter_preservesMatchingChunkData() throws Exception {
+            try (BinaryChunkTempRegionFileWriter writer = new BinaryChunkTempRegionFileWriter(tempDir.toPath().resolve("chunk-export-artifacts"))) {
+                writer.append(new CapturedChunkBaseline(new ChunkCoordinate("world", 0, 0), new byte[] { 'B', 'R', 'C', 'S', 1 }));
+                storage.saveReplay("chunk-export", new ReplaySaveRequest(
+                        List.of(new TimelineEvent.PlayerMove(0, "uuid-1", "Steve", "world", 1, 64, 1, 0, 0, "STANDING")),
+                        1_700_000_000_000L,
+                        writer.snapshotArtifacts())).get();
+            }
+
+            File exported = storage.getReplayFile("chunk-export", new ReplayExportQuery("Steve", null, null)).get();
+            assertNotNull(exported);
+            ReplayPlaybackData replayData = new BinaryReplayStorageCodec()
+                    .decodeReplayData(Files.readAllBytes(exported.toPath()), VersionUtil.MIN_RECORDING_VERSION);
+
+            assertTrue(replayData.chunkData().hasChunkData());
+            assertEquals(1, replayData.chunkData().metadata().chunkEntryCount());
         }
     }
 }

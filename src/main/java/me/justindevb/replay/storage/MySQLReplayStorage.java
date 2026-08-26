@@ -1,41 +1,56 @@
 package me.justindevb.replay.storage;
 
-import com.google.gson.Gson;
-import com.google.gson.GsonBuilder;
-import com.google.gson.reflect.TypeToken;
 import me.justindevb.replay.Replay;
+import me.justindevb.replay.api.ReplayExportQuery;
+import me.justindevb.replay.debug.ReplayDumpQuery;
 import me.justindevb.replay.recording.TimelineEvent;
-import me.justindevb.replay.recording.TimelineEventAdapter;
+import me.justindevb.replay.storage.binary.BinaryReplayStorageCodec;
+import me.justindevb.replay.util.ReplayNames;
 import me.justindevb.replay.util.io.ReplayCompressor;
-import me.justindevb.replay.util.VersionUtil;
 
 import javax.sql.DataSource;
 import java.io.*;
-import java.lang.reflect.Type;
-import java.nio.charset.StandardCharsets;
 import java.sql.*;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 
 public class MySQLReplayStorage implements ReplayStorage {
 
     private final DataSource dataSource;
-    private static final Type TIMELINE_LIST_TYPE = new TypeToken<List<TimelineEvent>>() {}.getType();
-    private final Gson gson = new GsonBuilder()
-            .registerTypeHierarchyAdapter(TimelineEvent.class, new TimelineEventAdapter())
-            .create();
     private final Replay replay;
+    private final ReplayStorageCodec saveCodec;
+    private final ReplayFormatDetector formatDetector;
+    private final ReplayExporter replayExporter;
+    private final ReplayDumpWriter replayDumpWriter;
 
     public MySQLReplayStorage(DataSource dataSource, Replay replay) {
+        this(dataSource, replay, new BinaryReplayStorageCodec(), defaultFormatDetector());
+    }
+
+    private static ReplayFormatDetector defaultFormatDetector() {
+        return new DefaultReplayFormatDetector(List.of(new JsonReplayStorageCodec(), new BinaryReplayStorageCodec()));
+    }
+
+    MySQLReplayStorage(DataSource dataSource, Replay replay, ReplayStorageCodec saveCodec, ReplayFormatDetector formatDetector) {
         this.dataSource = dataSource;
         this.replay = replay;
+        this.saveCodec = saveCodec;
+        this.formatDetector = formatDetector;
+        this.replayExporter = new ReplayExporter(new File(replay.getDataFolder(), "exports"));
+        this.replayDumpWriter = new ReplayDumpWriter(new File(replay.getDataFolder(), "dumps"));
         init();
     }
 
-    /** Returns true when the plugin config has compression enabled (default: true). */
-    private boolean isCompressionEnabled() {
-        return replay.getConfig().getBoolean("General.Compress-Replays", true);
+    private boolean usesCodecCompression() {
+        return saveCodec.supportsCompression();
+    }
+
+    private byte[] encodeForStorage(String name, ReplaySaveRequest request) throws IOException {
+        byte[] payload = saveCodec.finalizeReplay(name, request, replay.getPluginMeta().getVersion());
+        return usesCodecCompression() ? ReplayCompressor.compress(new String(payload, java.nio.charset.StandardCharsets.UTF_8)) : payload;
     }
 
     private void init() {
@@ -47,9 +62,17 @@ public class MySQLReplayStorage implements ReplayStorage {
                     CREATE TABLE IF NOT EXISTS replays (
                         name VARCHAR(64) PRIMARY KEY,
                         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        data MEDIUMBLOB NOT NULL
+                        is_protected BOOLEAN NOT NULL DEFAULT FALSE,
+                        protected_at TIMESTAMP NULL,
+                        protected_by VARCHAR(64) NULL,
+                        data LONGBLOB NOT NULL
                     )
                 """);
+
+                ensureColumnExists(conn, stmt, "is_protected", "BOOLEAN NOT NULL DEFAULT FALSE");
+                ensureColumnExists(conn, stmt, "protected_at", "TIMESTAMP NULL");
+                ensureColumnExists(conn, stmt, "protected_by", "VARCHAR(64) NULL");
+                stmt.executeUpdate("ALTER TABLE replays MODIFY COLUMN data LONGBLOB NOT NULL");
 
             } catch (SQLException e) {
                 replay.getLogger().log(java.util.logging.Level.SEVERE, "Failed to init replay table", e);
@@ -57,21 +80,52 @@ public class MySQLReplayStorage implements ReplayStorage {
         });
     }
 
+    private void ensureColumnExists(Connection conn, Statement stmt, String columnName, String definition) throws SQLException {
+        try (PreparedStatement ps = conn.prepareStatement("SHOW COLUMNS FROM replays LIKE ?")) {
+            ps.setString(1, columnName);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (!rs.next()) {
+                    stmt.executeUpdate("ALTER TABLE replays ADD COLUMN " + columnName + " " + definition);
+                }
+            }
+        }
+    }
+
+    private Optional<Boolean> getProtectionState(Connection conn, String name) throws SQLException {
+        try (PreparedStatement ps = conn.prepareStatement(
+                "SELECT is_protected FROM replays WHERE name=? LIMIT 1"
+        )) {
+            ps.setString(1, name);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (!rs.next()) {
+                    return Optional.empty();
+                }
+                return Optional.of(rs.getBoolean("is_protected"));
+            }
+        }
+    }
+
 
     @Override
     public CompletableFuture<Void> saveReplay(String name, List<TimelineEvent> timeline) {
+        return saveReplay(name, new ReplaySaveRequest(timeline));
+    }
+
+    @Override
+    public CompletableFuture<Void> saveReplay(String name, ReplaySaveRequest request) {
+        Optional<String> invalidName = ReplayNames.validateReplayName(name);
+        if (invalidName.isPresent()) {
+            return CompletableFuture.failedFuture(new IllegalArgumentException(invalidName.get()));
+        }
         return CompletableFuture.runAsync(() -> {
             try (Connection conn = dataSource.getConnection();
                  PreparedStatement ps = conn.prepareStatement("""
-                 INSERT INTO replays (name, data)
-                 VALUES (?, ?)
-                 ON DUPLICATE KEY UPDATE data = VALUES(data)
-             """)) {
+                  INSERT INTO replays (name, data)
+                  VALUES (?, ?)
+                  ON DUPLICATE KEY UPDATE data = VALUES(data), created_at = CURRENT_TIMESTAMP
+              """)) {
 
-                String json = VersionUtil.wrapTimeline(gson, timeline, replay.getPluginMeta().getVersion());
-                byte[] data = isCompressionEnabled()
-                        ? ReplayCompressor.compress(json)
-                        : json.getBytes(StandardCharsets.UTF_8);
+                byte[] data = encodeForStorage(name, request);
 
                 ps.setString(1, name);
                 ps.setBytes(2, data);
@@ -86,6 +140,14 @@ public class MySQLReplayStorage implements ReplayStorage {
 
     @Override
     public CompletableFuture<List<TimelineEvent>> loadReplay(String name) {
+        return loadReplayData(name).thenApply(data -> data == null ? null : data.timeline());
+    }
+
+    @Override
+    public CompletableFuture<ReplayPlaybackData> loadReplayData(String name) {
+        if (!ReplayNames.isValidReplayName(name)) {
+            return CompletableFuture.completedFuture(null);
+        }
         return CompletableFuture.supplyAsync(() -> {
             try (Connection conn = dataSource.getConnection();
                  PreparedStatement ps = conn.prepareStatement(
@@ -96,9 +158,9 @@ public class MySQLReplayStorage implements ReplayStorage {
 
                 try (ResultSet rs = ps.executeQuery()) {
                     if (!rs.next()) return null;
-                    // Auto-detect compression so legacy uncompressed rows still load
-                    String json = ReplayCompressor.decompressIfNeeded(rs.getBytes("data"));
-                    return VersionUtil.parseReplayJson(gson, json, replay.getPluginMeta().getVersion(), TIMELINE_LIST_TYPE);
+                    byte[] data = rs.getBytes("data");
+                    ReplayStorageCodec codec = formatDetector.detectCodec(name, data);
+                    return codec.decodeReplayData(data, replay.getPluginMeta().getVersion());
                 }
 
             } catch (Exception e) {
@@ -110,6 +172,9 @@ public class MySQLReplayStorage implements ReplayStorage {
 
     @Override
     public CompletableFuture<Boolean> replayExists(String name) {
+        if (!ReplayNames.isValidReplayName(name)) {
+            return CompletableFuture.completedFuture(false);
+        }
         return CompletableFuture.supplyAsync(() -> {
             try (Connection conn = dataSource.getConnection();
                  PreparedStatement ps = conn.prepareStatement(
@@ -131,19 +196,119 @@ public class MySQLReplayStorage implements ReplayStorage {
 
 
     @Override
-    public CompletableFuture<Boolean> deleteReplay(String name) {
+    public CompletableFuture<ReplayDeleteResult> deleteReplay(String name) {
+        if (!ReplayNames.isValidReplayName(name)) {
+            return CompletableFuture.completedFuture(ReplayDeleteResult.NOT_FOUND);
+        }
         return CompletableFuture.supplyAsync(() -> {
             try (Connection conn = dataSource.getConnection();
                  PreparedStatement ps = conn.prepareStatement(
                          "DELETE FROM replays WHERE name=?"
                  )) {
 
+                Optional<Boolean> protectionState = getProtectionState(conn, name);
+                if (protectionState.isEmpty()) {
+                    return ReplayDeleteResult.NOT_FOUND;
+                }
+                if (protectionState.get()) {
+                    return ReplayDeleteResult.PROTECTED;
+                }
+
                 ps.setString(1, name);
                 int affected = ps.executeUpdate();
-                return affected > 0;
+                return affected > 0 ? ReplayDeleteResult.DELETED : ReplayDeleteResult.NOT_FOUND;
 
             } catch (Exception e) {
                 throw new RuntimeException("Failed to delete replay: " + name, e);
+            }
+        });
+    }
+
+    @Override
+    public CompletableFuture<List<ReplaySummary>> listReplaySummaries() {
+        return CompletableFuture.supplyAsync(() -> {
+            List<ReplaySummary> summaries = new ArrayList<>();
+            try (Connection conn = dataSource.getConnection();
+                 PreparedStatement ps = conn.prepareStatement(
+                 "SELECT name, created_at, OCTET_LENGTH(data) AS data_size, is_protected, protected_at, protected_by "
+                     + "FROM replays ORDER BY created_at DESC"
+                 );
+                 ResultSet rs = ps.executeQuery()) {
+
+                while (rs.next()) {
+                    Timestamp createdAt = rs.getTimestamp("created_at");
+                Timestamp protectedAt = rs.getTimestamp("protected_at");
+                    summaries.add(new ReplaySummary(
+                            rs.getString("name"),
+                            createdAt != null ? createdAt.toInstant() : Instant.EPOCH,
+                            rs.getLong("data_size"),
+                    rs.getBoolean("is_protected"),
+                    protectedAt != null ? protectedAt.toInstant() : null,
+                    rs.getString("protected_by"),
+                            ReplayStorageType.MYSQL));
+                }
+                return summaries;
+
+            } catch (Exception e) {
+                throw new RuntimeException("Failed to list replay summaries", e);
+            }
+        });
+    }
+
+    @Override
+    public CompletableFuture<ReplayProtectionResult> protectReplay(String name, Instant protectedAt, String protectedBy) {
+        if (!ReplayNames.isValidReplayName(name)) {
+            return CompletableFuture.completedFuture(ReplayProtectionResult.NOT_FOUND);
+        }
+        return CompletableFuture.supplyAsync(() -> {
+            try (Connection conn = dataSource.getConnection()) {
+                Optional<Boolean> protectionState = getProtectionState(conn, name);
+                if (protectionState.isEmpty()) {
+                    return ReplayProtectionResult.NOT_FOUND;
+                }
+                if (protectionState.get()) {
+                    return ReplayProtectionResult.ALREADY_PROTECTED;
+                }
+
+                try (PreparedStatement ps = conn.prepareStatement(
+                        "UPDATE replays SET is_protected = TRUE, protected_at = ?, protected_by = ? WHERE name=?"
+                )) {
+                    ps.setTimestamp(1, Timestamp.from(protectedAt));
+                    ps.setString(2, protectedBy);
+                    ps.setString(3, name);
+                    ps.executeUpdate();
+                    return ReplayProtectionResult.UPDATED;
+                }
+            } catch (Exception e) {
+                throw new RuntimeException("Failed to protect replay: " + name, e);
+            }
+        });
+    }
+
+    @Override
+    public CompletableFuture<ReplayProtectionResult> unprotectReplay(String name) {
+        if (!ReplayNames.isValidReplayName(name)) {
+            return CompletableFuture.completedFuture(ReplayProtectionResult.NOT_FOUND);
+        }
+        return CompletableFuture.supplyAsync(() -> {
+            try (Connection conn = dataSource.getConnection()) {
+                Optional<Boolean> protectionState = getProtectionState(conn, name);
+                if (protectionState.isEmpty()) {
+                    return ReplayProtectionResult.NOT_FOUND;
+                }
+                if (!protectionState.get()) {
+                    return ReplayProtectionResult.ALREADY_UNPROTECTED;
+                }
+
+                try (PreparedStatement ps = conn.prepareStatement(
+                        "UPDATE replays SET is_protected = FALSE WHERE name=?"
+                )) {
+                    ps.setString(1, name);
+                    ps.executeUpdate();
+                    return ReplayProtectionResult.UPDATED;
+                }
+            } catch (Exception e) {
+                throw new RuntimeException("Failed to unprotect replay: " + name, e);
             }
         });
     }
@@ -172,6 +337,9 @@ public class MySQLReplayStorage implements ReplayStorage {
 
     @Override
     public CompletableFuture<File> getReplayFile(String name) {
+        if (!ReplayNames.isValidReplayName(name)) {
+            return CompletableFuture.completedFuture(null);
+        }
         return CompletableFuture.supplyAsync(() -> {
             try (Connection conn = dataSource.getConnection();
                 PreparedStatement ps = conn.prepareStatement("SELECT data FROM replays WHERE name=?")) {
@@ -181,20 +349,90 @@ public class MySQLReplayStorage implements ReplayStorage {
                     if (!rs.next())
                         return null;
 
-                    // Auto-detect compression; works for both compressed and plain rows
-                    String json = ReplayCompressor.decompressIfNeeded(rs.getBytes("data"));
-                    List<TimelineEvent> timeline = VersionUtil.parseReplayJson(gson, json, replay.getPluginMeta().getVersion(), TIMELINE_LIST_TYPE);
-
-                    File tempFile = File.createTempFile("replay_" + name + "_", ".json");
-                    tempFile.deleteOnExit();
-                    try (FileWriter writer = new FileWriter(tempFile)) {
-                        gson.toJson(timeline, writer);
-                    }
-                    return tempFile;
+                    byte[] data = rs.getBytes("data");
+                    ReplayStorageCodec codec = formatDetector.detectCodec(name, data);
+                    return codec.writeReplayFile(name, data, replay.getPluginMeta().getVersion());
                 }
             } catch (Exception e) {
                 replay.getLogger().log(java.util.logging.Level.SEVERE, "Failed to get replay file: " + name, e);
                 return null;
+            }
+        });
+    }
+
+    @Override
+    public CompletableFuture<File> getReplayFile(String name, ReplayExportQuery query) {
+        if (!ReplayNames.isValidReplayName(name)) {
+            return CompletableFuture.completedFuture(null);
+        }
+        return CompletableFuture.supplyAsync(() -> {
+            try (Connection conn = dataSource.getConnection();
+                 PreparedStatement ps = conn.prepareStatement("SELECT data FROM replays WHERE name=?")) {
+
+                ps.setString(1, name);
+                try (ResultSet rs = ps.executeQuery()) {
+                    if (!rs.next()) {
+                        return null;
+                    }
+
+                    byte[] data = rs.getBytes("data");
+                    ReplayStorageCodec codec = formatDetector.detectCodec(name, data);
+                    return replayExporter.exportReplay(name, codec.decodeReplayData(data, replay.getPluginMeta().getVersion()), query,
+                            replay.getPluginMeta().getVersion());
+                }
+            } catch (Exception e) {
+                replay.getLogger().log(java.util.logging.Level.SEVERE, "Failed to export replay file: " + name, e);
+                return null;
+            }
+        });
+    }
+
+    @Override
+    public CompletableFuture<ReplayInspection> getReplayInfo(String name) {
+        if (!ReplayNames.isValidReplayName(name)) {
+            return CompletableFuture.completedFuture(null);
+        }
+        return CompletableFuture.supplyAsync(() -> {
+            try (Connection conn = dataSource.getConnection();
+                 PreparedStatement ps = conn.prepareStatement("SELECT data FROM replays WHERE name=?")) {
+
+                ps.setString(1, name);
+                try (ResultSet rs = ps.executeQuery()) {
+                    if (!rs.next()) {
+                        return null;
+                    }
+
+                    byte[] data = rs.getBytes("data");
+                    ReplayStorageCodec codec = formatDetector.detectCodec(name, data);
+                    return codec.inspectReplay(name, data, replay.getPluginMeta().getVersion());
+                }
+            } catch (Exception e) {
+                throw new RuntimeException("Failed to inspect replay file: " + name, e);
+            }
+        });
+    }
+
+    @Override
+    public CompletableFuture<File> getReplayDumpFile(String name, ReplayDumpQuery query) {
+        if (!ReplayNames.isValidReplayName(name)) {
+            return CompletableFuture.completedFuture(null);
+        }
+        return CompletableFuture.supplyAsync(() -> {
+            try (Connection conn = dataSource.getConnection();
+                 PreparedStatement ps = conn.prepareStatement("SELECT data FROM replays WHERE name=?")) {
+
+                ps.setString(1, name);
+                try (ResultSet rs = ps.executeQuery()) {
+                    if (!rs.next()) {
+                        return null;
+                    }
+
+                    byte[] data = rs.getBytes("data");
+                    ReplayStorageCodec codec = formatDetector.detectCodec(name, data);
+                    return replayDumpWriter.writeDump(name, codec.decodeTimeline(data, replay.getPluginMeta().getVersion()), query);
+                }
+            } catch (Exception e) {
+                throw new RuntimeException("Failed to dump replay file: " + name, e);
             }
         });
     }

@@ -8,24 +8,71 @@ import java.util.List;
 public final class VersionUtil {
 
     /** Minimum plugin version required to read recordings produced by this build. */
-    public static final String MIN_RECORDING_VERSION = "1.4.0";
+    public static final String MIN_RECORDING_VERSION = "1.5.0-alpha.12";
 
     private VersionUtil() {}
 
     /**
      * Returns true if {@code running} is greater than or equal to {@code required}.
-     * Compares dot-separated integer segments (e.g. "1.4.0" >= "1.4.0").
+     * Supports alpha pre-release ordering (e.g. "1.4.0" >= "1.4.0-alpha.5").
      */
     public static boolean isAtLeast(String running, String required) {
-        String[] r = running.split("\\.");
-        String[] q = required.split("\\.");
-        int len = Math.max(r.length, q.length);
+        return compareVersions(running, required) >= 0;
+    }
+
+    /**
+     * Compares two version strings with alpha-build support.
+     * <p>
+     * Ordering examples: {@code 1.3.0 < 1.4.0-alpha.1 < 1.4.0-alpha.5 < 1.4.0}
+     *
+     * @return negative if {@code a} is older than {@code b}, 0 if equal, positive if {@code a} is newer
+     */
+    public static int compareVersions(String a, String b) {
+        String baseA = a.split("-")[0];
+        String baseB = b.split("-")[0];
+
+        int baseCmp = compareBase(baseA, baseB);
+        if (baseCmp != 0) return baseCmp;
+
+        // Same base – compare pre-release status
+        boolean alphaA = a.contains("-alpha");
+        boolean alphaB = b.contains("-alpha");
+
+        if (!alphaA && !alphaB) return 0;      // both releases
+        if (alphaA && !alphaB)  return -1;     // alpha < release
+        if (!alphaA)            return 1;      // release > alpha
+
+        // Both alpha with same base – compare build numbers
+        return Integer.compare(extractAlphaBuild(a), extractAlphaBuild(b));
+    }
+
+    /**
+     * Returns true if the given version string denotes an alpha/dev build.
+     */
+    public static boolean isAlpha(String version) {
+        return version.contains("-alpha");
+    }
+
+    private static int compareBase(String a, String b) {
+        String[] sa = a.split("\\.");
+        String[] sb = b.split("\\.");
+        int len = Math.max(sa.length, sb.length);
         for (int i = 0; i < len; i++) {
-            int rv = i < r.length ? parseSegment(r[i]) : 0;
-            int qv = i < q.length ? parseSegment(q[i]) : 0;
-            if (rv != qv) return rv > qv;
+            int va = i < sa.length ? parseSegment(sa[i]) : 0;
+            int vb = i < sb.length ? parseSegment(sb[i]) : 0;
+            if (va != vb) return Integer.compare(va, vb);
         }
-        return true;
+        return 0;
+    }
+
+    private static int extractAlphaBuild(String version) {
+        int idx = version.indexOf("-alpha.");
+        if (idx < 0) return 0;
+        try {
+            return Integer.parseInt(version.substring(idx + 7));
+        } catch (NumberFormatException e) {
+            return 0;
+        }
     }
 
     private static int parseSegment(String s) {

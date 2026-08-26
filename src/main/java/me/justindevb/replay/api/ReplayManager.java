@@ -1,6 +1,9 @@
 package me.justindevb.replay.api;
 
 import me.justindevb.replay.ReplaySession;
+import me.justindevb.replay.storage.ReplayDeleteResult;
+import me.justindevb.replay.storage.ReplayProtectionResult;
+import me.justindevb.replay.storage.ReplaySummary;
 import org.bukkit.entity.Player;
 
 import java.io.File;
@@ -56,23 +59,49 @@ public interface ReplayManager {
     Collection<?> getActiveReplays();
 
     /**
-     * List of all saved replays
+     * List of all saved replays. Uses a short-lived cache and refreshes
+     * the active storage backend when the cache is stale.
      * @return
      */
     CompletableFuture<List<String>> listSavedReplays();
 
     /**
+     * List metadata for all saved replays. Uses a short-lived cache and refreshes
+     * the active storage backend when the cache is stale.
+     *
+     * @return replay summaries for administrative and retention flows
+     */
+    CompletableFuture<List<ReplaySummary>> listSavedReplaySummaries();
+
+    /**
      * Delete a saved replay.
      *
      * @param name replay name
-     * @return true if deleted, false if replay did not exist or delete failed
+     * @return explicit delete result
      */
-    CompletableFuture<Boolean> deleteSavedReplay(String name);
+    CompletableFuture<ReplayDeleteResult> deleteSavedReplay(String name);
+
+    /**
+     * Protect a saved replay from deletion.
+     *
+     * @param name replay name
+     * @param protectedBy actor who enabled protection
+     * @return explicit protection update result
+     */
+    CompletableFuture<ReplayProtectionResult> protectSavedReplay(String name, String protectedBy);
+
+    /**
+     * Remove deletion protection from a saved replay.
+     *
+     * @param name replay name
+     * @return explicit protection update result
+     */
+    CompletableFuture<ReplayProtectionResult> unprotectSavedReplay(String name);
 
     /**
      * Get a cached snapshot of saved replay names for synchronous access
-     * (e.g. tab completion). The cache is refreshed automatically after
-     * saves and deletes.
+     * (e.g. tab completion). If the cache is stale, a refresh is started
+     * from the active storage backend before the current snapshot is returned.
      */
     List<String> getCachedReplayNames();
 
@@ -82,5 +111,16 @@ public interface ReplayManager {
      * @return
      */
     CompletableFuture<Optional<File>> getSavedReplayFile(String name);
+
+    /**
+     * Export a replay file with optional player and tick-range filters.
+     *
+     * @param name replay name
+     * @param query export filters
+     * @return optional exported file
+     */
+    default CompletableFuture<Optional<File>> getSavedReplayFile(String name, ReplayExportQuery query) {
+        return getSavedReplayFile(name);
+    }
 
 }

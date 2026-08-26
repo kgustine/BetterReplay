@@ -1,5 +1,6 @@
 package me.justindevb.replay.recording;
 
+import me.justindevb.replay.chunk.ChunkCoordinate;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.World;
@@ -7,6 +8,7 @@ import org.bukkit.entity.EntityType;
 import org.bukkit.entity.Player;
 
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Tracks which players and entities are being recorded.
@@ -15,12 +17,12 @@ import java.util.*;
 public class EntityTracker {
 
     private final Set<UUID> trackedPlayers;
-    private final Map<UUID, EntityType> trackedEntities = new HashMap<>();
+    private final Map<UUID, EntityType> trackedEntities = new ConcurrentHashMap<>();
 
     private static final double NEARBY_RADIUS_SQUARED = 32.0 * 32.0;
 
     public EntityTracker(Collection<Player> players) {
-        this.trackedPlayers = new HashSet<>();
+        this.trackedPlayers = ConcurrentHashMap.newKeySet();
         for (Player p : players) {
             this.trackedPlayers.add(p.getUniqueId());
         }
@@ -81,5 +83,24 @@ public class EntityTracker {
         }
 
         return false;
+    }
+
+    public Set<ChunkCoordinate> collectTrackedPlayerChunks() {
+        Set<ChunkCoordinate> trackedChunks = new HashSet<>();
+        for (UUID uuid : Set.copyOf(trackedPlayers)) {
+            Player tracked = Bukkit.getPlayer(uuid);
+            if (tracked == null || !tracked.isOnline()) {
+                continue;
+            }
+            Location location = tracked.getLocation();
+            if (location == null || location.getWorld() == null) {
+                continue;
+            }
+            trackedChunks.add(new ChunkCoordinate(
+                    location.getWorld().getName(),
+                    Math.floorDiv(location.getBlockX(), 16),
+                    Math.floorDiv(location.getBlockZ(), 16)));
+        }
+        return trackedChunks;
     }
 }

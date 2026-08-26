@@ -28,6 +28,16 @@ class VersionUtilTest {
         }
 
         @Test
+        void releaseMeetsSameBaseAlphaRequirement() {
+            assertTrue(VersionUtil.isAtLeast("1.5.0", "1.5.0-alpha.9"));
+        }
+
+        @Test
+        void alphaDoesNotMeetSameBaseReleaseRequirement() {
+            assertFalse(VersionUtil.isAtLeast("1.5.0-alpha.9", "1.5.0"));
+        }
+
+        @Test
         void runningHigherMajor() {
             assertTrue(VersionUtil.isAtLeast("2.0.0", "1.4.0"));
         }
@@ -55,6 +65,11 @@ class VersionUtilTest {
         @Test
         void runningLowerPatch() {
             assertFalse(VersionUtil.isAtLeast("1.4.0", "1.4.1"));
+        }
+
+        @Test
+        void olderAlphaBuildDoesNotMeetNewerAlphaRequirement() {
+            assertFalse(VersionUtil.isAtLeast("1.5.0-alpha.9", "1.5.0-alpha.10"));
         }
 
         @Test
@@ -128,7 +143,7 @@ class VersionUtilTest {
             );
             String json = VersionUtil.wrapTimeline(gson, original, "1.4.0");
 
-            List<TimelineEvent> parsed = VersionUtil.parseReplayJson(gson, json, "1.4.0", LIST_TYPE);
+            List<TimelineEvent> parsed = VersionUtil.parseReplayJson(gson, json, VersionUtil.MIN_RECORDING_VERSION, LIST_TYPE);
 
             assertEquals(1, parsed.size());
             assertInstanceOf(TimelineEvent.PlayerQuit.class, parsed.get(0));
@@ -180,6 +195,95 @@ class VersionUtilTest {
 
             List<TimelineEvent> parsed = VersionUtil.parseReplayJson(gson, json, "1.4.0", LIST_TYPE);
             assertEquals(1, parsed.size());
+        }
+    }
+
+    // ── compareVersions ───────────────────────────────────────
+
+    @Nested
+    class CompareVersions {
+
+        @Test
+        void sameRelease() {
+            assertEquals(0, VersionUtil.compareVersions("1.4.0", "1.4.0"));
+        }
+
+        @Test
+        void newerMajor() {
+            assertTrue(VersionUtil.compareVersions("2.0.0", "1.4.0") > 0);
+        }
+
+        @Test
+        void newerMinor() {
+            assertTrue(VersionUtil.compareVersions("1.5.0", "1.4.0") > 0);
+        }
+
+        @Test
+        void olderRelease() {
+            assertTrue(VersionUtil.compareVersions("1.3.0", "1.4.0") < 0);
+        }
+
+        @Test
+        void alphaLessThanSameBaseRelease() {
+            assertTrue(VersionUtil.compareVersions("1.4.0-alpha.5", "1.4.0") < 0);
+        }
+
+        @Test
+        void releaseGreaterThanSameBaseAlpha() {
+            assertTrue(VersionUtil.compareVersions("1.4.0", "1.4.0-alpha.5") > 0);
+        }
+
+        @Test
+        void newerAlphaBuild() {
+            assertTrue(VersionUtil.compareVersions("1.4.0-alpha.5", "1.4.0-alpha.3") > 0);
+        }
+
+        @Test
+        void olderAlphaBuild() {
+            assertTrue(VersionUtil.compareVersions("1.4.0-alpha.3", "1.4.0-alpha.5") < 0);
+        }
+
+        @Test
+        void sameAlphaBuild() {
+            assertEquals(0, VersionUtil.compareVersions("1.4.0-alpha.5", "1.4.0-alpha.5"));
+        }
+
+        @Test
+        void alphaOfNewerBaseBeatsCurrent() {
+            // 1.5.0-alpha.1 is newer than 1.4.0 release (different base)
+            assertTrue(VersionUtil.compareVersions("1.5.0-alpha.1", "1.4.0") > 0);
+        }
+
+        @Test
+        void releaseNewerThanAlphaOfOlderBase() {
+            assertTrue(VersionUtil.compareVersions("1.5.0", "1.4.0-alpha.5") > 0);
+        }
+
+        @Test
+        void snapshotTreatedAsRelease() {
+            // -SNAPSHOT is not -alpha, so it's treated as a release
+            assertEquals(0, VersionUtil.compareVersions("1.4.0-SNAPSHOT", "1.4.0"));
+        }
+    }
+
+    // ── isAlpha ───────────────────────────────────────────────
+
+    @Nested
+    class IsAlpha {
+
+        @Test
+        void alphaVersion() {
+            assertTrue(VersionUtil.isAlpha("1.4.0-alpha.5"));
+        }
+
+        @Test
+        void releaseVersion() {
+            assertFalse(VersionUtil.isAlpha("1.4.0"));
+        }
+
+        @Test
+        void snapshotNotAlpha() {
+            assertFalse(VersionUtil.isAlpha("1.4.0-SNAPSHOT"));
         }
     }
 }

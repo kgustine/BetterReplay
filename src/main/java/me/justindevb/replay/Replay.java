@@ -2,11 +2,32 @@ package me.justindevb.replay;
 
 import com.github.retrooper.packetevents.PacketEvents;
 import com.github.retrooper.packetevents.event.PacketListenerPriority;
+import com.github.retrooper.packetevents.protocol.player.ClientVersion;
+import com.github.retrooper.packetevents.protocol.world.biome.Biomes;
+import com.github.retrooper.packetevents.protocol.world.states.WrappedBlockState;
 import com.tcoded.folialib.FoliaLib;
+import me.justindevb.replay.velocity.ReplayJoinListener;
+import me.justindevb.replay.velocity.ReplayLaunchMessageListener;
+import me.justindevb.replay.velocity.ReplayTransferManager;
 import org.bstats.bukkit.Metrics;
 import io.github.retrooper.packetevents.factory.spigot.SpigotPacketEventsBuilder;
 import me.justindevb.replay.api.ReplayAPI;
+import me.justindevb.replay.benchmark.ReplayBenchmarkCommand;
+import me.justindevb.replay.benchmark.ReplayBenchmarkHarness;
+import me.justindevb.replay.benchmark.ReplayBenchmarkReportWriter;
+import me.justindevb.replay.benchmark.ReplayBenchmarkService;
+import me.justindevb.replay.config.ReplayConfigManager;
+import me.justindevb.replay.config.ReplayConfigReloadResult;
+import me.justindevb.replay.config.ReplayConfigSetting;
+import me.justindevb.replay.config.ReplayMessagesConfig;
+import me.justindevb.replay.debug.ReplayDebugCommand;
+import me.justindevb.replay.export.ReplayExportCommand;
+import me.justindevb.replay.metrics.BStatsCharts;
 import me.justindevb.replay.listeners.PacketEventsListener;
+import me.justindevb.replay.listeners.ViaProxyDetailsListener;
+import me.justindevb.replay.playback.ReplayViewerStateManager;
+import me.justindevb.replay.retention.ReplayRetentionService;
+import me.justindevb.replay.retention.RetentionPolicy;
 import me.justindevb.replay.util.ReplayCache;
 import me.justindevb.replay.util.UpdateChecker;
 import me.justindevb.replay.storage.FileReplayStorage;
@@ -17,6 +38,13 @@ import org.bukkit.command.PluginCommand;
 import org.bukkit.configuration.file.FileConfiguration;
 import org.bukkit.plugin.java.JavaPlugin;
 
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.EnumMap;
+import java.util.List;
+import java.util.Locale;
+import java.util.Objects;
+import java.util.concurrent.Executor;
 import java.util.logging.Level;
 
 public class Replay extends JavaPlugin {
@@ -27,6 +55,12 @@ public class Replay extends JavaPlugin {
     private ReplayCache replayCache;
     private ReplayManagerImpl manager;
     private FoliaLib foliaLib;
+    private ReplayBenchmarkService replayBenchmarkService;
+    private ReplayRetentionService replayRetentionService;
+    private ReplayViewerStateManager replayViewerStateManager;
+    private ReplayTransferManager transferManager;
+    private ReplayMessagesConfig messages;
+    private ViaProxyDetailsListener viaProxyDetailsListener;
 
     @Override
     public void onLoad() {
@@ -41,12 +75,20 @@ public class Replay extends JavaPlugin {
     public void onEnable() {
         instance = this;
         PacketEvents.getAPI().init();
+        prewarmPacketEventsChunkMappings();
         foliaLib = new FoliaLib(this);
 
         recorderManager = new RecorderManager(this);
         manager = new ReplayManagerImpl(this, recorderManager);
-        ReplayCommand replayCommand = new ReplayCommand(manager);
         initConfig();
+        messages = new ReplayMessagesConfig(this);
+        replayViewerStateManager = new ReplayViewerStateManager(this);
+        getServer().getPluginManager().registerEvents(replayViewerStateManager, this);
+        replayBenchmarkService = createReplayBenchmarkService();
+        ReplayCommand replayCommand = new ReplayCommand(manager,
+            new ReplayBenchmarkCommand(replayBenchmarkService, foliaLib, getLogger()),
+            new ReplayExportCommand(manager, foliaLib, getLogger()),
+            new ReplayDebugCommand(this, manager, foliaLib, getLogger()));
 
         PluginCommand cmd = getCommand("replay");
         if (cmd != null) {
@@ -58,12 +100,18 @@ public class Replay extends JavaPlugin {
         ReplayAPI.init(manager);
 
         initStorage();
+        initRetention();
+        recorderManager.recoverPendingAppendLogs();
+
+        initVelocityLogic();
+        initViaVersionProxyDetails();
 
         initBstats();
 
 
         checkForUpdate();
     }
+
 
     @Override
     public void onDisable() {
@@ -76,6 +124,9 @@ public class Replay extends JavaPlugin {
 
         PacketEvents.getAPI().terminate();
         ReplayAPI.shutdown();
+
+        if (replayRetentionService != null)
+            replayRetentionService.stop();
 
         if (connectionManager != null)
             connectionManager.shutdown();
@@ -97,53 +148,47 @@ public class Replay extends JavaPlugin {
         return storage;
     }
 
-    private void initConfig() {
-        initGeneralConfigSettings();
-
-        getConfig().options().copyDefaults(true);
-        saveConfig();
+    public ReplayMessagesConfig getMessages() {
+        return messages;
     }
 
-    private void initGeneralConfigSettings() {
-        FileConfiguration config = getConfig();
-        config.addDefault("General.Check-Update", true);
-        config.addDefault("General.Compress-Replays", true);  // GZIP compress replay data
-        config.addDefault("General.Storage-Type", "file");  // Valid options: "file","mysql"
-        config.addDefault("General.MySQL.host", "host");
-        config.addDefault("General.MySQL.port", 3306);
-        config.addDefault("General.MySQL.database", "database");
-        config.addDefault("General.MySQL.user", "username");
-        config.addDefault("General.MySQL.password", "password");
+    private void initConfig() {
+        new ReplayConfigManager(this).initialize();
     }
 
     private void checkForUpdate() {
-        if (!getConfig().getBoolean("General.Check-Update"))
+        if (!ReplayConfigSetting.CHECK_UPDATE.getBoolean(getConfig()))
             return;
-        new UpdateChecker(this, 133445).getVersion(version -> {
-            String localVersion = this.getPluginMeta().getVersion().replace("-SNAPSHOT", "");
-            if (localVersion.equals(version))
+
+        String currentVersion = getPluginMeta().getVersion();
+        new UpdateChecker(this, "betterreplay").checkForUpdate(currentVersion, result -> {
+            if (result.updateAvailable()) {
+                String suffix = "release".equals(result.versionType()) ? "" : " (" + result.versionType() + ")";
+                getLogger().log(Level.INFO, "Update available: v" + result.latestVersion() + suffix
+                        + " — https://modrinth.com/plugin/betterreplay");
+            } else {
                 getLogger().log(Level.INFO, "You are up to date!");
-            else
-                getLogger().log(Level.INFO, "There is an update available! Download at: https://www.spigotmc.org/resources/betterreplay.133445/");
+            }
         });
     }
 
     private void initStorage() {
         FileConfiguration config = getConfig();
-        if (getConfig().getString("General.Storage-Type").contentEquals("mysql")) {
-            String host = config.getString("General.MySQL.host");
-            int port = config.getInt("General.MySQL.port");
-            String database = config.getString("General.MySQL.database");
-            String user = config.getString("General.MySQL.user");
-            String password = config.getString("General.MySQL.password");
+        String storageType = ReplayConfigSetting.STORAGE_TYPE.getString(config).toLowerCase(Locale.ROOT);
+        if (storageType.contentEquals("mysql")) {
+            String host = ReplayConfigSetting.MYSQL_HOST.getString(config);
+            int port = ReplayConfigSetting.MYSQL_PORT.getInt(config);
+            String database = ReplayConfigSetting.MYSQL_DATABASE.getString(config);
+            String user = ReplayConfigSetting.MYSQL_USER.getString(config);
+            String password = ReplayConfigSetting.MYSQL_PASSWORD.getString(config);
 
             connectionManager = new MySQLConnectionManager(host, port, database, user, password);
 
             storage = new MySQLReplayStorage(connectionManager.getDataSource(), this);
-        } else if (getConfig().getString("General.Storage-Type").contentEquals("file")) {
+        } else if (storageType.contentEquals("file")) {
             storage = new FileReplayStorage(this);
         } else {
-            getLogger().log(Level.SEVERE, "Invalid storage selected: " + getConfig().getString("General.Storage-Type"));
+            getLogger().log(Level.SEVERE, "Invalid storage selected: " + storageType);
             getLogger().log(Level.SEVERE, "Valid types: file, mysql");
             getLogger().log(Level.SEVERE, "Defaulting to file");
             storage = new FileReplayStorage(this);
@@ -151,6 +196,51 @@ public class Replay extends JavaPlugin {
 
         replayCache = new ReplayCache();
         getReplayStorage().listReplays().thenAccept(replays -> replayCache.setReplays(replays));
+    }
+
+    private void initRetention() {
+        RetentionPolicy policy = RetentionPolicy.fromConfig(getConfig(), getLogger());
+        replayRetentionService = new ReplayRetentionService(getReplayStorage(), foliaLib, getLogger(), policy, replayCache);
+        replayRetentionService.start();
+    }
+
+    public ReplayConfigReloadResult reloadRuntimeConfig() {
+        FileConfiguration previousConfig = getConfig();
+        EnumMap<ReplayConfigSetting, Object> previousValues = snapshotConfigValues(previousConfig);
+
+        new ReplayConfigManager(this).initialize();
+        if (messages != null) messages.reload();
+
+        EnumMap<ReplayConfigSetting, Object> currentValues = snapshotConfigValues(getConfig());
+        List<ReplayConfigSetting> changedSettings = new ArrayList<>();
+        for (ReplayConfigSetting setting : ReplayConfigSetting.values()) {
+            if (!Objects.equals(previousValues.get(setting), currentValues.get(setting))) {
+                changedSettings.add(setting);
+            }
+        }
+
+        boolean retentionServiceRestarted = false;
+        if (storage != null && foliaLib != null) {
+            if (replayRetentionService != null) {
+                replayRetentionService.stop();
+            }
+            initRetention();
+            retentionServiceRestarted = true;
+        }
+
+        return ReplayConfigReloadResult.fromChangedSettings(changedSettings, retentionServiceRestarted);
+    }
+
+    private EnumMap<ReplayConfigSetting, Object> snapshotConfigValues(FileConfiguration config) {
+        EnumMap<ReplayConfigSetting, Object> values = new EnumMap<>(ReplayConfigSetting.class);
+        if (config == null) {
+            return values;
+        }
+
+        for (ReplayConfigSetting setting : ReplayConfigSetting.values()) {
+            values.put(setting, setting.readValue(config));
+        }
+        return values;
     }
 
     public ReplayCache getReplayCache() {
@@ -161,12 +251,57 @@ public class Replay extends JavaPlugin {
         return manager;
     }
 
+    public ReplayTransferManager getTransferManager() {
+        return transferManager;
+    }
+
+    public ViaProxyDetailsListener getViaProxyDetailsListener() {
+        return viaProxyDetailsListener;
+    }
+
     public void initBstats() {
         int pluginId = 29341;
-        new Metrics(this, pluginId);
+        Metrics metrics = new Metrics(this, pluginId);
+        BStatsCharts.register(metrics, getConfig());
     }
 
     public FoliaLib getFoliaLib() {
         return foliaLib;
+    }
+
+    public ReplayViewerStateManager getReplayViewerStateManager() {
+        return replayViewerStateManager;
+    }
+
+    private ReplayBenchmarkService createReplayBenchmarkService() {
+        Executor asyncExecutor = runnable -> foliaLib.getScheduler().runAsync(task -> runnable.run());
+        return new ReplayBenchmarkService(
+                new ReplayBenchmarkHarness(getPluginMeta().getVersion()),
+                new ReplayBenchmarkReportWriter(Path.of(getDataFolder().getPath(), "benchmarks")),
+                asyncExecutor);
+    }
+
+    private void prewarmPacketEventsChunkMappings() {
+        try {
+            WrappedBlockState.getByString(ClientVersion.V_1_21_11, "minecraft:air");
+            Biomes.getRegistry().getByName(ClientVersion.V_1_21_11, "minecraft:plains");
+        } catch (RuntimeException ex) {
+            getLogger().log(Level.FINE, "Failed to prewarm PacketEvents chunk mappings", ex);
+        }
+    }
+
+    private void initVelocityLogic() {
+        transferManager = new ReplayTransferManager(this);
+
+        getServer().getPluginManager().registerEvents(new ReplayJoinListener(this), this);
+
+        getServer().getMessenger().registerOutgoingPluginChannel(this, ReplayTransferManager.CHANNEL);
+        getServer().getMessenger().registerIncomingPluginChannel(this, ReplayTransferManager.CHANNEL, new ReplayLaunchMessageListener(this));
+    }
+
+    private void initViaVersionProxyDetails() {
+        viaProxyDetailsListener = new ViaProxyDetailsListener(getLogger());
+        getServer().getPluginManager().registerEvents(viaProxyDetailsListener, this);
+        getServer().getMessenger().registerIncomingPluginChannel(this, ViaProxyDetailsListener.CHANNEL, viaProxyDetailsListener);
     }
 }

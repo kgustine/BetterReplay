@@ -1,5 +1,6 @@
 package me.justindevb.replay.recording;
 
+import me.justindevb.replay.chunk.ChunkCoordinate;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.World;
@@ -15,6 +16,9 @@ import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
 
 import java.util.List;
+import java.util.Iterator;
+import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -83,11 +87,39 @@ class EntityTrackerTest {
     }
 
     @Test
+    void trackedEntitiesIterator_allowsConcurrentEntityTrackingChanges() {
+        UUID firstEntityUuid = UUID.randomUUID();
+        tracker.trackEntity(firstEntityUuid, EntityType.SKELETON);
+
+        Iterator<Map.Entry<UUID, EntityType>> iterator = tracker.getTrackedEntities().entrySet().iterator();
+        tracker.trackEntity(UUID.randomUUID(), EntityType.ZOMBIE);
+        tracker.removeEntity(firstEntityUuid);
+
+        assertDoesNotThrow(() -> {
+            while (iterator.hasNext()) {
+                iterator.next();
+            }
+        });
+    }
+
+    @Test
     void removePlayer_removesFromTracked() {
         tracker.removePlayer(uuid1);
 
         assertFalse(tracker.isTrackedPlayer(uuid1));
         assertTrue(tracker.isTrackedPlayer(uuid2));
+    }
+
+    @Test
+    void trackedPlayersIterator_allowsConcurrentPlayerRemoval() {
+        Iterator<UUID> iterator = tracker.getTrackedPlayers().iterator();
+        tracker.removePlayer(uuid1);
+
+        assertDoesNotThrow(() -> {
+            while (iterator.hasNext()) {
+                iterator.next();
+            }
+        });
     }
 
     @Test
@@ -179,5 +211,27 @@ class EntityTrackerTest {
         tracker.clearPlayers();
 
         assertTrue(tracker.isEntityTracked(entityUuid));
+    }
+
+    @Test
+    void collectTrackedPlayerChunks_returnsUniqueChunkCoordinatesForOnlinePlayers() {
+        Location playerOneLocation = new Location(world, 31.9, 64, 31.9);
+        Location playerTwoLocation = new Location(world, 16.0, 64, 0.0);
+        when(player1.isOnline()).thenReturn(true);
+        when(player2.isOnline()).thenReturn(true);
+        when(player1.getLocation()).thenReturn(playerOneLocation);
+        when(player2.getLocation()).thenReturn(playerTwoLocation);
+        when(world.getName()).thenReturn("world");
+
+        try (MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class)) {
+            bukkit.when(() -> Bukkit.getPlayer(uuid1)).thenReturn(player1);
+            bukkit.when(() -> Bukkit.getPlayer(uuid2)).thenReturn(player2);
+
+            Set<ChunkCoordinate> trackedChunks = tracker.collectTrackedPlayerChunks();
+
+            assertEquals(Set.of(
+                    new ChunkCoordinate("world", 1, 1),
+                    new ChunkCoordinate("world", 1, 0)), trackedChunks);
+        }
     }
 }

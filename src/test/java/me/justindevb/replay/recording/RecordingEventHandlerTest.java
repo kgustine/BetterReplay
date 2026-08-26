@@ -19,6 +19,7 @@ import org.bukkit.event.entity.EntityDamageEvent;
 import org.bukkit.event.entity.EntityDeathEvent;
 import org.bukkit.event.entity.EntitySpawnEvent;
 import org.bukkit.event.entity.PlayerDeathEvent;
+import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.player.*;
 import org.bukkit.inventory.EquipmentSlot;
 import org.bukkit.inventory.ItemStack;
@@ -32,6 +33,8 @@ import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
 
 import java.util.UUID;
+import java.util.ArrayList;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
@@ -44,11 +47,15 @@ class RecordingEventHandlerTest {
     private TimelineBuilder builder;
     private int tick = 10;
     private RecordingEventHandler handler;
+    private List<UUID> storageDirtyPlayers;
+    private List<UUID> equipmentDirtyPlayers;
 
     @BeforeEach
     void setUp() {
         builder = new TimelineBuilder();
-        handler = new RecordingEventHandler(tracker, builder, () -> tick);
+        storageDirtyPlayers = new ArrayList<>();
+        equipmentDirtyPlayers = new ArrayList<>();
+        handler = new RecordingEventHandler(tracker, builder, () -> tick, storageDirtyPlayers::add, equipmentDirtyPlayers::add);
     }
 
     private Player mockPlayer(UUID uuid) {
@@ -292,6 +299,34 @@ class RecordingEventHandlerTest {
 
         TimelineEvent.SprintToggle st = (TimelineEvent.SprintToggle) builder.getTimeline().get(0);
         assertFalse(st.sprinting());
+    }
+
+    @Test
+    void onItemHeld_marksEquipmentDirtyOnly() {
+        UUID uuid = UUID.randomUUID();
+        Player p = mockPlayer(uuid);
+        when(tracker.isTrackedPlayer(uuid)).thenReturn(true);
+
+        PlayerItemHeldEvent event = new PlayerItemHeldEvent(p, 0, 1);
+        handler.onItemHeld(event);
+
+        assertEquals(List.of(uuid), equipmentDirtyPlayers);
+        assertTrue(storageDirtyPlayers.isEmpty());
+    }
+
+    @Test
+    void onInventoryClick_marksStorageAndEquipmentDirty() {
+        UUID uuid = UUID.randomUUID();
+        Player p = mockPlayer(uuid);
+        when(tracker.isTrackedPlayer(uuid)).thenReturn(true);
+
+        InventoryClickEvent event = mock(InventoryClickEvent.class);
+        when(event.getWhoClicked()).thenReturn(p);
+
+        handler.onInventoryClick(event);
+
+        assertEquals(List.of(uuid), storageDirtyPlayers);
+        assertEquals(List.of(uuid), equipmentDirtyPlayers);
     }
 
     // ── SneakToggle ───────────────────────────────────────────

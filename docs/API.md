@@ -11,6 +11,7 @@ BetterReplay exposes a public API that other plugins can use to start/stop recor
   - [Maven](#maven)
   - [Gradle (Groovy DSL)](#gradle-groovy-dsl)
   - [Gradle (Kotlin DSL)](#gradle-kotlin-dsl)
+- [Replay Export Queries](#replay-export-queries)
 - [ReplayManager Methods](#replaymanager-methods)
   - [startRecording](#startrecording)
   - [stopRecording](#stoprecording)
@@ -19,7 +20,10 @@ BetterReplay exposes a public API that other plugins can use to start/stop recor
   - [stopReplay](#stopreplay)
   - [getActiveReplays](#getactivereplays)
   - [listSavedReplays](#listsavedreplays)
+    - [listSavedReplaySummaries](#listsavedreplaysummaries)
   - [deleteSavedReplay](#deletesavedreplay)
+    - [protectSavedReplay](#protectsavedreplay)
+    - [unprotectSavedReplay](#unprotectsavedreplay)
   - [getSavedReplayFile](#getsavedreplayfile)
 - [Events](#events)
   - [RecordingStartEvent](#recordingstartevent)
@@ -128,6 +132,24 @@ dependencies {
 
 ---
 
+## Replay Export Queries
+
+Filtered replay export uses `ReplayExportQuery`.
+
+```java
+ReplayExportQuery query = new ReplayExportQuery("Steve", 200, 400);
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `player` | `String` | Player name or UUID to keep. Use `null`, blank, or `all` for all players |
+| `startTick` | `Integer` | Inclusive export start tick, or `null` for the beginning |
+| `endTick` | `Integer` | Inclusive export end tick, or `null` for the end |
+
+`ReplayExportQuery.all()` exports the full replay without filters.
+
+---
+
 ## ReplayManager Methods
 
 ### startRecording
@@ -135,7 +157,7 @@ dependencies {
 Starts recording a new session that captures player and nearby entity activity.
 
 ```java
-void startRecording(String name, Collection<Player> players, int durationSeconds)
+boolean startRecording(String name, Collection<Player> players, int durationSeconds)
 ```
 
 | Parameter | Type | Description |
@@ -143,6 +165,8 @@ void startRecording(String name, Collection<Player> players, int durationSeconds
 | `name` | `String` | Unique name for this recording session |
 | `players` | `Collection<Player>` | The players to record |
 | `durationSeconds` | `int` | Duration in seconds. Use `-1` for infinite (manual stop) |
+
+Recording names must be 1-64 characters long and may not contain control characters or `\ / : * ? " < > | §`.
 
 **Example:**
 
@@ -230,7 +254,9 @@ CompletableFuture<Optional<ReplaySession>> startReplay(String replayName, Player
 | `replayName` | `String` | Name of the saved replay to play |
 | `viewer` | `Player` | The player who will watch the replay |
 
-**Returns:** A `CompletableFuture` containing an `Optional<ReplaySession>`. The optional is empty if the replay was not found, was empty/corrupted, or if the parameters were null.
+Replay names must be 1-64 characters long and may not contain control characters or `\ / : * ? " < > | §`.
+
+**Returns:** A `CompletableFuture` containing an `Optional<ReplaySession>`. The optional is empty if the replay was not found, was empty/corrupted, the name was invalid, or if the parameters were null.
 
 **Example:**
 
@@ -301,7 +327,7 @@ player.sendMessage("Active replays: " + replays.size());
 
 ### listSavedReplays
 
-Lists the names of all saved replays in storage.
+Lists the names of all saved replays. Results are served from a shared 5-second replay-list cache when fresh; stale reads refresh from the active storage backend and update the cache.
 
 ```java
 CompletableFuture<List<String>> listSavedReplays()
@@ -324,30 +350,153 @@ manager.listSavedReplays().thenAccept(names -> {
 
 ---
 
-### deleteSavedReplay
+### listSavedReplaySummaries
 
-Deletes a saved replay from storage.
+Lists replay metadata for administrative, retention, and protection-aware workflows. Results are served from a shared 5-second replay-list cache when fresh; stale reads refresh from the active storage backend and update the cache.
 
 ```java
-CompletableFuture<Boolean> deleteSavedReplay(String name)
+CompletableFuture<List<ReplaySummary>> listSavedReplaySummaries()
 ```
 
-| Parameter | Type | Description |
-|---|---|---|
-| `name` | `String` | The name of the replay to delete |
+Each `ReplaySummary` contains:
 
-**Returns:** A `CompletableFuture<Boolean>` — `true` if deleted, `false` if it didn't exist or the delete failed.
+| Field | Type | Description |
+|---|---|---|
+| `name` | `String` | Replay name |
+| `createdAt` | `Instant` | Replay creation timestamp |
+| `sizeBytes` | `long` | Stored replay size |
+| `protectedFromDeletion` | `boolean` | Whether delete and retention flows must skip it |
+| `protectedAt` | `Instant` | When protection was last enabled |
+| `protectedBy` | `String` | Who enabled protection |
+| `storageType` | `ReplayStorageType` | Active backing store |
 
 **Example:**
 
 ```java
 ReplayManager manager = ReplayAPI.get();
 
-manager.deleteSavedReplay("pvp-match-42").thenAccept(deleted -> {
-    if (deleted) {
-        player.sendMessage("Replay deleted.");
-    } else {
-        player.sendMessage("Replay not found or could not be deleted.");
+manager.listSavedReplaySummaries().thenAccept(summaries -> {
+    for (ReplaySummary summary : summaries) {
+        player.sendMessage(summary.name() + " protected=" + summary.protectedFromDeletion());
+    }
+});
+```
+
+---
+
+### deleteSavedReplay
+
+Deletes a saved replay from storage.
+
+```java
+CompletableFuture<ReplayDeleteResult> deleteSavedReplay(String name)
+```
+
+| Parameter | Type | Description |
+|---|---|---|
+| `name` | `String` | The name of the replay to delete |
+
+Replay names must be 1-64 characters long and may not contain control characters or `\ / : * ? " < > | §`.
+
+**Returns:** A `CompletableFuture<ReplayDeleteResult>`.
+
+Possible results:
+
+| Result | Meaning |
+|---|---|
+| `DELETED` | Replay was deleted |
+| `PROTECTED` | Replay is protected from deletion |
+| `NOT_FOUND` | Replay does not exist |
+
+**Migration note:** Older plugin versions returned `CompletableFuture<Boolean>`. Update integrations to branch on `ReplayDeleteResult` instead of treating every `false` outcome the same.
+
+**Example:**
+
+```java
+ReplayManager manager = ReplayAPI.get();
+
+manager.deleteSavedReplay("pvp-match-42").thenAccept(result -> {
+    switch (result) {
+        case DELETED -> player.sendMessage("Replay deleted.");
+        case PROTECTED -> player.sendMessage("Replay is protected.");
+        case NOT_FOUND -> player.sendMessage("Replay not found.");
+    }
+});
+```
+
+---
+
+### protectSavedReplay
+
+Marks a saved replay as protected from both manual deletion and retention cleanup.
+
+```java
+CompletableFuture<ReplayProtectionResult> protectSavedReplay(String name, String protectedBy)
+```
+
+| Parameter | Type | Description |
+|---|---|---|
+| `name` | `String` | The replay to protect |
+| `protectedBy` | `String` | Audit value describing who enabled protection |
+
+Replay names must be 1-64 characters long and may not contain control characters or `\ / : * ? " < > | §`.
+
+**Returns:** A `CompletableFuture<ReplayProtectionResult>`.
+
+Possible results:
+
+| Result | Meaning |
+|---|---|
+| `UPDATED` | Protection was enabled |
+| `ALREADY_PROTECTED` | Replay was already protected |
+| `NOT_FOUND` | Replay does not exist |
+
+**Example:**
+
+```java
+ReplayManager manager = ReplayAPI.get();
+
+manager.protectSavedReplay("pvp-match-42", player.getName()).thenAccept(result -> {
+    if (result == ReplayProtectionResult.UPDATED) {
+        player.sendMessage("Replay protected.");
+    }
+});
+```
+
+---
+
+### unprotectSavedReplay
+
+Removes deletion protection from a saved replay while preserving the last protection audit metadata.
+
+```java
+CompletableFuture<ReplayProtectionResult> unprotectSavedReplay(String name)
+```
+
+| Parameter | Type | Description |
+|---|---|---|
+| `name` | `String` | The replay to unprotect |
+
+Replay names must be 1-64 characters long and may not contain control characters or `\ / : * ? " < > | §`.
+
+**Returns:** A `CompletableFuture<ReplayProtectionResult>`.
+
+Possible results:
+
+| Result | Meaning |
+|---|---|
+| `UPDATED` | Protection was removed |
+| `ALREADY_UNPROTECTED` | Replay was already unprotected |
+| `NOT_FOUND` | Replay does not exist |
+
+**Example:**
+
+```java
+ReplayManager manager = ReplayAPI.get();
+
+manager.unprotectSavedReplay("pvp-match-42").thenAccept(result -> {
+    if (result == ReplayProtectionResult.UPDATED) {
+        player.sendMessage("Replay unprotected.");
     }
 });
 ```
@@ -356,17 +505,21 @@ manager.deleteSavedReplay("pvp-match-42").thenAccept(deleted -> {
 
 ### getSavedReplayFile
 
-Gets the replay data file on disk. Only applicable when using file-based storage.
+Gets the replay data file on disk, or exports a filtered binary archive when a query is supplied.
 
 ```java
 CompletableFuture<Optional<File>> getSavedReplayFile(String name)
+CompletableFuture<Optional<File>> getSavedReplayFile(String name, ReplayExportQuery query)
 ```
 
 | Parameter | Type | Description |
 |---|---|---|
 | `name` | `String` | The name of the replay |
+| `query` | `ReplayExportQuery` | Optional export filters for player and tick range |
 
-**Returns:** A `CompletableFuture` containing an `Optional<File>`. Empty if the file doesn't exist.
+Replay names must be 1-64 characters long and may not contain control characters or `\ / : * ? " < > | §`.
+
+**Returns:** A `CompletableFuture` containing an `Optional<File>`. Empty if the file doesn't exist or the replay name is invalid. Filtered exports are written as temporary `.br` archives.
 
 **Example:**
 
@@ -378,6 +531,11 @@ manager.getSavedReplayFile("pvp-match-42").thenAccept(optFile -> {
         player.sendMessage("Replay file: " + file.getAbsolutePath());
         player.sendMessage("Size: " + (file.length() / 1024) + " KB");
     });
+});
+
+ReplayExportQuery query = new ReplayExportQuery("Steve", 200, 400);
+manager.getSavedReplayFile("pvp-match-42", query).thenAccept(optFile -> {
+    optFile.ifPresent(file -> player.sendMessage("Filtered replay file: " + file.getAbsolutePath()));
 });
 ```
 

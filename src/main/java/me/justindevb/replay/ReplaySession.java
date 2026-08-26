@@ -12,10 +12,16 @@ import me.justindevb.replay.entity.RecordedEntityFactory;
 import me.justindevb.replay.entity.RecordedPlayer;
 import me.justindevb.replay.api.events.ReplayStartEvent;
 import me.justindevb.replay.api.events.ReplayStopEvent;
+import me.justindevb.replay.chunk.ReplayChunkData;
+import me.justindevb.replay.config.ReplayConfigSetting;
 import me.justindevb.replay.playback.PlaybackEngine;
 import me.justindevb.replay.playback.ReplayBlockManager;
 import me.justindevb.replay.playback.ReplayInventoryUI;
+import me.justindevb.replay.playback.ReplayViewerState;
+import me.justindevb.replay.playback.ReplayViewerStateManager;
 import me.justindevb.replay.recording.TimelineEvent;
+import me.justindevb.replay.storage.ReplayPlaybackData;
+import me.justindevb.replay.util.ReplayMessages;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
 import org.bukkit.*;
@@ -41,28 +47,58 @@ public class ReplaySession implements Listener, PacketListener {
 
     private WrappedTask replayTask = null;
     private List<TimelineEvent> timeline;
+    private final ReplayChunkData chunkData;
     private final Set<Integer> trackedEntityIds = new HashSet<>();
     private final Set<UUID> deadEntities = new HashSet<>();
     private final Map<UUID, RecordedEntity> recordedEntities = new HashMap<>();
     private int tick = 0;
     private boolean paused = false;
     private boolean stopped = false;
+    private double playbackSpeed;
+    private final double speedStep;
+    private final double maxSpeed;
+    private double accumulatedTicks = 0.0;
+    private ReplayViewerState savedViewerState;
+    private boolean suppressInventoryRestore = false;
+    private boolean suppressViewerStateRestore = false;
+    private boolean suppressStopMessage = false;
+    private boolean queueViewerStateRestoreOnRejoin = false;
 
     // Delegates
     private final ReplayBlockManager blockManager;
     private final PlaybackEngine playbackEngine;
     private final ReplayInventoryUI inventoryUI;
+    private final ReplayViewerStateManager viewerStateManager;
 
     public ReplaySession(List<TimelineEvent> timeline, Player viewer, Replay replay) {
-        this.timeline = timeline;
+        this(new ReplayPlaybackData(timeline), viewer, replay);
+    }
+
+    public ReplaySession(ReplayPlaybackData replayData, Player viewer, Replay replay) {
         this.viewer = viewer;
         this.replay = replay;
+        this.timeline = replayData.timeline();
+        this.chunkData = replayData.chunkData();
 
-        this.blockManager = new ReplayBlockManager(viewer, replay);
+        this.speedStep = ReplayConfigSetting.PLAYBACK_SPEED_STEP.getDouble(replay.getConfig());
+        this.maxSpeed = Math.max(1.0D, ReplayConfigSetting.PLAYBACK_MAX_SPEED.getDouble(replay.getConfig()));
+        this.playbackSpeed = 1.0D;
+        this.viewerStateManager = replay.getReplayViewerStateManager();
+
+        this.blockManager = new ReplayBlockManager(viewer, replay, chunkData);
         this.playbackEngine = new PlaybackEngine(viewer, replay, trackedEntityIds, deadEntities, recordedEntities, blockManager);
-        this.inventoryUI = new ReplayInventoryUI(viewer, () -> recordedEntities, new ReplayInventoryUI.SessionControl() {
-            @Override public void togglePause() { paused = !paused; }
+        this.inventoryUI = new ReplayInventoryUI(replay, viewer, () -> recordedEntities, new ReplayInventoryUI.SessionControl() {
+            @Override public void togglePause() {
+                paused = !paused;
+                if (paused) {
+                    inventoryUI.showStepControls();
+                } else {
+                    inventoryUI.showSpeedControls(playbackSpeed);
+                }
+            }
             @Override public void skipSeconds(int seconds) { ReplaySession.this.skipSeconds(seconds); }
+            @Override public void stepTick(int direction) { ReplaySession.this.stepTick(direction); }
+            @Override public void changeSpeed(int direction) { ReplaySession.this.changeSpeed(direction); }
             @Override public void stop() { ReplaySession.this.stop(); }
             @Override public boolean isActive() { return ReplaySession.this.isActive(); }
         });
@@ -73,18 +109,29 @@ public class ReplaySession implements Listener, PacketListener {
 
     public void start() {
         if (timeline == null || timeline.isEmpty()) {
-            viewer.sendMessage("Replay is empty!");
+            if (replay.getMessages() != null) {
+                viewer.sendMessage(replay.getMessages().component("replay.empty", "<red>Replay is empty!"));
+            } else {
+                viewer.sendMessage("Replay is empty!");
+            }
             return;
         }
 
         ReplaySession existingSession = ReplayRegistry.getSessionForViewer(viewer);
-        ReplayRegistry.add(this);
-        timeline = blockManager.enrichBlockBreakStageTimeline(timeline);
         if (existingSession != null) {
             inventoryUI.transferSavedInventory(existingSession.getInventoryUI());
+            transferSavedViewerState(existingSession);
+            existingSession.prepareForHandoff();
+            existingSession.stop();
         } else {
             inventoryUI.copyInventory();
+            captureViewerState();
         }
+
+        ReplayRegistry.add(this);
+        timeline = blockManager.enrichBlockBreakStageTimeline(timeline);
+        blockManager.configureChunkReplayContext(timeline, () -> tick);
+        applyReplayViewerSafety();
 
         TimelineEvent firstLocationEvent = timeline.stream()
                 .filter(e -> e instanceof TimelineEvent.PlayerMove || e instanceof TimelineEvent.EntityMove
@@ -105,12 +152,14 @@ public class ReplaySession implements Listener, PacketListener {
         }
 
         inventoryUI.giveReplayControls();
+        inventoryUI.showSpeedControls(playbackSpeed);
         blockManager.primeInitialBrokenBlockStates(timeline);
 
         Bukkit.getPluginManager().callEvent(new ReplayStartEvent(viewer, this));
 
         replay.getFoliaLib().getScheduler().runTimer(task -> {
             if (paused) {
+                blockManager.refreshVisibleChunkBaselines();
                 sendActionBar();
                 return;
             }
@@ -124,13 +173,20 @@ public class ReplaySession implements Listener, PacketListener {
 
             if (viewer == null || !viewer.isOnline()) {
                 task.cancel();
-                recordedEntities.values().forEach(RecordedEntity::destroy);
-                recordedEntities.clear();
+                replayTask = null;
+                stop();
                 return;
             }
 
-            TimelineEvent firstEvent = timeline.get(tick);
-            int recordedTick = firstEvent.tick();
+            blockManager.refreshVisibleChunkBaselines();
+
+            accumulatedTicks += playbackSpeed;
+            int tickGroupsToProcess = (int) accumulatedTicks;
+            accumulatedTicks -= tickGroupsToProcess;
+
+            for (int g = 0; g < tickGroupsToProcess && tick < timeline.size(); g++) {
+                TimelineEvent firstEvent = timeline.get(tick);
+                int recordedTick = firstEvent.tick();
 
             while (tick < timeline.size()) {
                 TimelineEvent event = timeline.get(tick);
@@ -139,6 +195,18 @@ public class ReplaySession implements Listener, PacketListener {
 
                 if (event instanceof TimelineEvent.BlockBreakStage bbs) {
                     blockManager.showGlobalBlockBreakStage(bbs);
+                    tick++;
+                    continue;
+                }
+
+                if (event instanceof TimelineEvent.SoundEffect sound) {
+                    playbackEngine.playSound(sound);
+                    tick++;
+                    continue;
+                }
+
+                if (event instanceof TimelineEvent.SplashPotionImpact impact) {
+                    playbackEngine.playSplashPotionImpact(impact);
                     tick++;
                     continue;
                 }
@@ -159,7 +227,7 @@ public class ReplaySession implements Listener, PacketListener {
 
                 if (event instanceof TimelineEvent.PlayerQuit) {
                     if (recordedEntities.get(uuid) instanceof RecordedPlayer rp) {
-                        viewer.sendMessage("[BetterReplay] " + rp.getName() + " disconnected");
+                        ReplayMessages.send(viewer, "[BetterReplay] " + rp.getName() + " disconnected");
                     }
                     RecordedEntity entity = recordedEntities.remove(uuid);
                     if (entity != null) {
@@ -201,13 +269,20 @@ public class ReplaySession implements Listener, PacketListener {
                     recordedEntities.put(uuid, recorded);
 
                     if (recorded instanceof RecordedPlayer rp) {
-                        TimelineEvent.InventoryUpdate inv = getInventorySnapshotForPlayer(uuid);
-                        if (inv != null) rp.updateInventory(inv);
+                        TimelineEvent.InventoryStorageUpdate storage = getInventoryStorageSnapshotForPlayer(uuid);
+                        if (storage != null) {
+                            rp.updateStorage(storage);
+                        }
+                        TimelineEvent.EquipmentStateUpdate equipment = getEquipmentStateForPlayer(uuid);
+                        if (equipment != null) {
+                            rp.updateEquipment(equipment);
+                        }
                     }
                 }
 
                 playbackEngine.handleEvent(recorded, event);
                 tick++;
+            }
             }
             sendActionBar();
         }, 1L, 1L);
@@ -228,18 +303,43 @@ public class ReplaySession implements Listener, PacketListener {
             blockManager.incrementEpoch();
             blockManager.clearAllVisibleBreakStages();
             blockManager.restoreSessionBaseline();
-            inventoryUI.restoreInventory();
+            if (!suppressInventoryRestore) {
+                inventoryUI.restoreInventory();
+            }
+            if (!suppressViewerStateRestore) {
+                restoreViewerState();
+            }
             if (replayTask != null) {
                 replay.getFoliaLib().getScheduler().cancelTask(replayTask);
                 replayTask = null;
             }
 
-            viewer.sendMessage("Replay finished");
+            if (!suppressStopMessage && viewer.isOnline()) {
+                if (replay.getMessages() != null) {
+                    viewer.sendMessage(replay.getMessages().component("replay.finished", "<green>Replay finished"));
+                } else {
+                    viewer.sendMessage("Replay finished");
+                }
+            }
         } finally {
             ReplayRegistry.remove(this);
             HandlerList.unregisterAll(this);
             HandlerList.unregisterAll(inventoryUI);
         }
+    }
+
+    // -- Speed --
+
+    private void changeSpeed(int direction) {
+        double newSpeed = playbackSpeed + (direction * speedStep);
+        // Round to avoid floating point drift
+        newSpeed = Math.round(newSpeed * 100.0) / 100.0;
+        if (newSpeed < speedStep) newSpeed = speedStep;
+        if (newSpeed > maxSpeed) newSpeed = maxSpeed;
+        playbackSpeed = newSpeed;
+        accumulatedTicks = 0.0;
+        inventoryUI.showSpeedControls(playbackSpeed);
+        sendActionBar();
     }
 
     // -- Skip / Seek --
@@ -256,14 +356,40 @@ public class ReplaySession implements Listener, PacketListener {
         if (targetRecordedTick > maxRecordedTick) targetRecordedTick = maxRecordedTick;
 
         int targetIndex = findTimelineIndexAfterRecordedTick(targetRecordedTick);
+        seekToIndex(targetIndex);
+    }
 
-        if (targetIndex != currentIndex) {
-            blockManager.incrementEpoch();
+    private void stepTick(int direction) {
+        if (timeline == null || timeline.isEmpty()) return;
+
+        int currentIndex = Math.max(0, Math.min(tick, timeline.size()));
+
+        if (direction > 0) {
+            // Step forward: advance past the next recorded tick group
+            if (currentIndex >= timeline.size()) return;
+            int recordedTick = timeline.get(currentIndex).tick();
+            int targetIndex = findTimelineIndexAfterRecordedTick(recordedTick);
+            seekToIndex(targetIndex);
+        } else {
+            // Step backward: go to the start of the currently displayed tick group
+            if (currentIndex <= 0) return;
+            int currentRecordedTick = getRecordedTickAtIndex(currentIndex - 1);
+            int startOfCurrentGroup = findTimelineIndexAfterRecordedTick(currentRecordedTick - 1);
+            seekToIndex(startOfCurrentGroup);
         }
+    }
+
+    private void seekToIndex(int targetIndex) {
+        int currentIndex = Math.max(0, Math.min(tick, timeline.size()));
+        targetIndex = Math.max(0, Math.min(targetIndex, timeline.size()));
+
+        if (targetIndex == currentIndex) return;
+
+        blockManager.incrementEpoch();
 
         if (targetIndex > currentIndex) {
             blockManager.applyReplayBlockChangesInRange(currentIndex, targetIndex, timeline);
-        } else if (targetIndex < currentIndex) {
+        } else {
             blockManager.rebuildReplayBlockStateUntil(targetIndex, timeline);
         }
 
@@ -274,8 +400,11 @@ public class ReplaySession implements Listener, PacketListener {
 
     private void syncEntityStatesAtIndex(int targetIndex) {
         Map<UUID, TimelineEvent> firstEventByUUID = new LinkedHashMap<>();
+        Map<UUID, TimelineEvent> creationEventByUUID = collectEntityCreationEventsForSeek(timeline, targetIndex);
         Map<UUID, TimelineEvent> lastLocationByUUID = new LinkedHashMap<>();
-        Map<UUID, TimelineEvent.InventoryUpdate> lastInventoryByUUID = new LinkedHashMap<>();
+        Map<UUID, TimelineEvent.InventoryStorageUpdate> lastInventoryByUUID = new LinkedHashMap<>();
+        Map<UUID, TimelineEvent.EquipmentStateUpdate> lastEquipmentByUUID = new LinkedHashMap<>();
+        Map<UUID, Double> lastHealthByUUID = new LinkedHashMap<>();
         Set<UUID> shouldHaveQuitAtTarget = new HashSet<>();
         Set<UUID> shouldBeDeadAtTarget = new HashSet<>();
 
@@ -296,7 +425,12 @@ public class ReplaySession implements Listener, PacketListener {
             switch (event) {
                 case TimelineEvent.PlayerMove ignored2 -> lastLocationByUUID.put(uuid, event);
                 case TimelineEvent.EntityMove ignored2 -> lastLocationByUUID.put(uuid, event);
-                case TimelineEvent.InventoryUpdate inv -> lastInventoryByUUID.put(uuid, inv);
+                case TimelineEvent.InventoryStorageUpdate inv -> lastInventoryByUUID.put(uuid, inv);
+                case TimelineEvent.EquipmentStateUpdate equipment -> lastEquipmentByUUID.put(uuid, equipment);
+                case TimelineEvent.Damaged damage -> {
+                    if (damage.health() >= 0) lastHealthByUUID.put(uuid, damage.health());
+                }
+                case TimelineEvent.HealthUpdate health -> lastHealthByUUID.put(uuid, health.health());
                 case TimelineEvent.PlayerQuit ignored2 -> shouldHaveQuitAtTarget.add(uuid);
                 case TimelineEvent.EntityDeath ignored2 -> shouldBeDeadAtTarget.add(uuid);
                 default -> {}
@@ -324,7 +458,8 @@ public class ReplaySession implements Listener, PacketListener {
             if (recordedEntities.containsKey(uuid)) continue;
             if (!lastLocationByUUID.containsKey(uuid)) continue;
 
-            TimelineEvent firstEvent = firstEventByUUID.get(uuid);
+            TimelineEvent firstEvent = creationEventByUUID.get(uuid);
+            if (firstEvent == null) continue;
             TimelineEvent locEvent = lastLocationByUUID.get(uuid);
 
             Location loc = locationFromEvent(locEvent);
@@ -346,12 +481,54 @@ public class ReplaySession implements Listener, PacketListener {
             entity.moveTo(loc);
         }
 
-        for (Map.Entry<UUID, TimelineEvent.InventoryUpdate> entry : lastInventoryByUUID.entrySet()) {
+        for (Map.Entry<UUID, TimelineEvent.InventoryStorageUpdate> entry : lastInventoryByUUID.entrySet()) {
             RecordedEntity entity = recordedEntities.get(entry.getKey());
             if (entity instanceof RecordedPlayer rp) {
-                rp.updateInventory(entry.getValue());
+                rp.updateStorage(entry.getValue());
             }
         }
+
+        for (Map.Entry<UUID, TimelineEvent.EquipmentStateUpdate> entry : lastEquipmentByUUID.entrySet()) {
+            RecordedEntity entity = recordedEntities.get(entry.getKey());
+            if (entity instanceof RecordedPlayer rp) {
+                rp.updateEquipment(entry.getValue());
+            }
+        }
+
+        for (Map.Entry<UUID, RecordedEntity> entry : recordedEntities.entrySet()) {
+            RecordedEntity entity = entry.getValue();
+            if (entity instanceof RecordedPlayer) {
+                // Reset stale client health before applying the state at the seek target.
+                playbackEngine.updateHealth(entity, 20.0);
+            }
+            Double health = lastHealthByUUID.get(entry.getKey());
+            if (health != null) {
+                playbackEngine.updateHealth(entity, health);
+            }
+        }
+    }
+
+    static Map<UUID, TimelineEvent> collectEntityCreationEventsForSeek(List<TimelineEvent> timeline, int targetIndex) {
+        Map<UUID, TimelineEvent> creationEventByUUID = new LinkedHashMap<>();
+        int end = Math.min(targetIndex, timeline.size());
+        for (int i = 0; i < end; i++) {
+            TimelineEvent event = timeline.get(i);
+            if (!isEntityCreationEvent(event)) continue;
+
+            String uuidStr = event.uuid();
+            if (uuidStr == null) continue;
+            try {
+                creationEventByUUID.putIfAbsent(UUID.fromString(uuidStr), event);
+            } catch (IllegalArgumentException ignored) {
+            }
+        }
+        return creationEventByUUID;
+    }
+
+    private static boolean isEntityCreationEvent(TimelineEvent event) {
+        return event instanceof TimelineEvent.PlayerMove
+                || event instanceof TimelineEvent.EntityMove
+                || event instanceof TimelineEvent.EntitySpawn;
     }
 
     // -- Helpers --
@@ -364,12 +541,23 @@ public class ReplaySession implements Listener, PacketListener {
         trackedEntityIds.clear();
     }
 
-    private TimelineEvent.InventoryUpdate getInventorySnapshotForPlayer(UUID uuid) {
+    private TimelineEvent.InventoryStorageUpdate getInventoryStorageSnapshotForPlayer(UUID uuid) {
         String uuidStr = uuid.toString();
         for (TimelineEvent event : timeline) {
-            if (event instanceof TimelineEvent.InventoryUpdate inv
+            if (event instanceof TimelineEvent.InventoryStorageUpdate inv
                     && uuidStr.equals(inv.uuid())) {
                 return inv;
+            }
+        }
+        return null;
+    }
+
+    private TimelineEvent.EquipmentStateUpdate getEquipmentStateForPlayer(UUID uuid) {
+        String uuidStr = uuid.toString();
+        for (TimelineEvent event : timeline) {
+            if (event instanceof TimelineEvent.EquipmentStateUpdate equipment
+                    && uuidStr.equals(equipment.uuid())) {
+                return equipment;
             }
         }
         return null;
@@ -416,6 +604,44 @@ public class ReplaySession implements Listener, PacketListener {
         return Math.max(0, Math.min(result, timeline.size()));
     }
 
+    private void prepareForHandoff() {
+        suppressInventoryRestore = true;
+        suppressViewerStateRestore = true;
+        suppressStopMessage = true;
+    }
+
+    private void captureViewerState() {
+        viewerStateManager.clearPendingRestore(viewer.getUniqueId());
+        savedViewerState = viewerStateManager.capture(viewer);
+    }
+
+    private void transferSavedViewerState(ReplaySession other) {
+        viewerStateManager.clearPendingRestore(viewer.getUniqueId());
+        savedViewerState = other.savedViewerState != null
+                ? other.savedViewerState
+                : viewerStateManager.capture(viewer);
+    }
+
+    private void applyReplayViewerSafety() {
+        savedViewerState = viewerStateManager.applyReplaySafety(viewer, savedViewerState);
+    }
+
+    private void restoreViewerState() {
+        if (savedViewerState == null) {
+            return;
+        }
+
+        if ((queueViewerStateRestoreOnRejoin || !viewer.isOnline())
+                && ReplayConfigSetting.PLAYBACK_RESTORE_VIEWER_STATE_ON_REJOIN.getBoolean(replay.getConfig())) {
+            viewerStateManager.queuePendingRestore(viewer.getUniqueId(), savedViewerState);
+        } else if (!queueViewerStateRestoreOnRejoin) {
+            viewerStateManager.restoreViewerState(viewer, savedViewerState);
+        }
+
+        savedViewerState = null;
+        queueViewerStateRestoreOnRejoin = false;
+    }
+
     private boolean isActive() {
         return ReplayRegistry.contains(this);
     }
@@ -444,12 +670,20 @@ public class ReplaySession implements Listener, PacketListener {
 
         Component bar;
         if (paused) {
-            bar = Component.text("\u23F8 Replay paused: ", NamedTextColor.YELLOW)
+            bar = replay.getMessages() != null
+                    ? replay.getMessages().component("action-bar.paused", "<yellow>\u23F8 Replay paused: <gray>%current% / %total%",
+                    "current", current, "total", total)
+                    : Component.text("\u23F8 Replay paused: ", NamedTextColor.YELLOW)
                     .append(Component.text(current + " / " + total, NamedTextColor.GRAY));
         } else {
-            bar = Component.text("\u25B6 Replay: ", NamedTextColor.GREEN)
+            String speedText = String.format("%.1fx", playbackSpeed);
+            bar = replay.getMessages() != null
+                    ? replay.getMessages().component("action-bar.playing", "<green>\u25B6 Replay: <gray>%current% / %total% <dark_gray>(%percent%%) <aqua>[%speed%]",
+                    "current", current, "total", total, "percent", String.valueOf(percent), "speed", speedText)
+                    : Component.text("\u25B6 Replay: ", NamedTextColor.GREEN)
                     .append(Component.text(current + " / " + total, NamedTextColor.GRAY))
-                    .append(Component.text(" (" + percent + "%)", NamedTextColor.DARK_GRAY));
+                    .append(Component.text(" (" + percent + "%)", NamedTextColor.DARK_GRAY))
+                    .append(Component.text(" [" + speedText + "]", NamedTextColor.AQUA));
         }
         viewer.sendActionBar(bar);
     }
@@ -458,8 +692,10 @@ public class ReplaySession implements Listener, PacketListener {
 
     @EventHandler
     public void onPlayerQuit(PlayerQuitEvent event) {
-        if (event.getPlayer().equals(viewer))
+        if (event.getPlayer().equals(viewer)) {
+            queueViewerStateRestoreOnRejoin = true;
             stop();
+        }
     }
 
     @EventHandler(priority = EventPriority.MONITOR)

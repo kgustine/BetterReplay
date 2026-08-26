@@ -1,6 +1,7 @@
 package me.justindevb.replay.recording;
 
 import com.google.gson.*;
+import me.justindevb.replay.util.io.SerializedItemData;
 
 import java.lang.reflect.Type;
 import java.util.ArrayList;
@@ -69,21 +70,20 @@ public class TimelineEventAdapter implements JsonSerializer<TimelineEvent>, Json
                 json.addProperty("yaw", e.yaw());
                 json.addProperty("pitch", e.pitch());
             }
-            case TimelineEvent.InventoryUpdate e -> {
+            case TimelineEvent.InventoryStorageUpdate e -> {
                 json.addProperty("tick", e.tick());
-                json.addProperty("type", "inventory_update");
+                json.addProperty("type", "inventory_storage_update");
                 json.addProperty("uuid", e.uuid());
-                json.addProperty("mainHand", e.mainHand());
-                json.addProperty("offHand", e.offHand());
-                json.add("armor", ctx.serialize(e.armor()));
-                json.add("contents", ctx.serialize(e.contents()));
+                json.add("storage", ctx.serialize(writeSerializedItemList(e.storage())));
             }
-            case TimelineEvent.HeldItemChange e -> {
+            case TimelineEvent.EquipmentStateUpdate e -> {
                 json.addProperty("tick", e.tick());
-                json.addProperty("type", "held_item_change");
+                json.addProperty("type", "equipment_state_update");
                 json.addProperty("uuid", e.uuid());
-                json.addProperty("mainHand", e.mainHand());
-                json.addProperty("offHand", e.offHand());
+                json.addProperty("heldSlot", e.heldSlot());
+                json.addProperty("mainHand", writeSerializedItem(e.mainHand()));
+                json.addProperty("offHand", writeSerializedItem(e.offHand()));
+                json.add("armor", ctx.serialize(writeSerializedItemList(e.armor())));
             }
             case TimelineEvent.BlockBreak e -> {
                 json.addProperty("tick", e.tick());
@@ -170,6 +170,37 @@ public class TimelineEventAdapter implements JsonSerializer<TimelineEvent>, Json
                 json.addProperty("entityType", e.entityType());
                 json.addProperty("cause", e.cause());
                 json.addProperty("finalDamage", e.finalDamage());
+                if (e.health() >= 0) json.addProperty("health", e.health());
+                if (e.critical()) json.addProperty("critical", true);
+            }
+            case TimelineEvent.HealthUpdate e -> {
+                json.addProperty("tick", e.tick());
+                json.addProperty("type", "health_update");
+                json.addProperty("uuid", e.uuid());
+                json.addProperty("entityType", e.entityType());
+                json.addProperty("health", e.health());
+            }
+            case TimelineEvent.SoundEffect e -> {
+                json.addProperty("tick", e.tick());
+                json.addProperty("type", "sound_effect");
+                json.addProperty("uuid", e.uuid());
+                json.addProperty("sound", e.sound());
+                json.addProperty("world", e.world());
+                json.addProperty("x", e.x());
+                json.addProperty("y", e.y());
+                json.addProperty("z", e.z());
+                json.addProperty("volume", e.volume());
+                json.addProperty("pitch", e.pitch());
+            }
+            case TimelineEvent.SplashPotionImpact e -> {
+                json.addProperty("tick", e.tick());
+                json.addProperty("type", "splash_potion_impact");
+                json.addProperty("uuid", e.uuid());
+                json.addProperty("world", e.world());
+                json.addProperty("x", e.x());
+                json.addProperty("y", e.y());
+                json.addProperty("z", e.z());
+                json.addProperty("color", e.color());
             }
             case TimelineEvent.EntitySpawn e -> {
                 json.addProperty("tick", e.tick());
@@ -180,6 +211,7 @@ public class TimelineEventAdapter implements JsonSerializer<TimelineEvent>, Json
                 json.addProperty("x", e.x());
                 json.addProperty("y", e.y());
                 json.addProperty("z", e.z());
+                if (e.item() != null) json.addProperty("item", e.item());
             }
             case TimelineEvent.EntityDeath e -> {
                 json.addProperty("tick", e.tick());
@@ -232,17 +264,16 @@ public class TimelineEventAdapter implements JsonSerializer<TimelineEvent>, Json
                     optDouble(obj, "x", 0), optDouble(obj, "y", 0), optDouble(obj, "z", 0),
                     optFloat(obj, "yaw", 0f), optFloat(obj, "pitch", 0f)
             );
-            case "inventory_update" -> new TimelineEvent.InventoryUpdate(
+                case "inventory_storage_update" -> new TimelineEvent.InventoryStorageUpdate(
                     tick, uuid,
-                    optString(obj, "mainHand"),
-                    optString(obj, "offHand"),
-                    readStringList(obj, "armor"),
-                    readStringList(obj, "contents")
+                    readSerializedItemList(obj, "storage")
             );
-            case "held_item_change" -> new TimelineEvent.HeldItemChange(
+                case "equipment_state_update" -> new TimelineEvent.EquipmentStateUpdate(
                     tick, uuid,
-                    optString(obj, "mainHand"),
-                    optString(obj, "offHand")
+                    optInt(obj, "heldSlot", 0),
+                    readSerializedItem(obj, "mainHand"),
+                    readSerializedItem(obj, "offHand"),
+                    readSerializedItemList(obj, "armor")
             );
             case "block_break" -> new TimelineEvent.BlockBreak(
                     tick, uuid,
@@ -302,14 +333,35 @@ public class TimelineEventAdapter implements JsonSerializer<TimelineEvent>, Json
                     tick, uuid,
                     optString(obj, "entityType"),
                     optString(obj, "cause"),
-                    optDouble(obj, "finalDamage", 0)
+                    optDouble(obj, "finalDamage", 0),
+                    optDouble(obj, "health", -1),
+                    optBoolean(obj, "critical", false)
+            );
+            case "health_update" -> new TimelineEvent.HealthUpdate(
+                    tick, uuid,
+                    optString(obj, "entityType"),
+                    optDouble(obj, "health", 0)
+            );
+            case "sound_effect" -> new TimelineEvent.SoundEffect(
+                    tick, uuid,
+                    optString(obj, "sound"),
+                    optString(obj, "world"),
+                    optDouble(obj, "x", 0), optDouble(obj, "y", 0), optDouble(obj, "z", 0),
+                    optFloat(obj, "volume", 1f), optFloat(obj, "pitch", 1f)
+            );
+            case "splash_potion_impact" -> new TimelineEvent.SplashPotionImpact(
+                    tick, uuid,
+                    optString(obj, "world"),
+                    optDouble(obj, "x", 0), optDouble(obj, "y", 0), optDouble(obj, "z", 0),
+                    optInt(obj, "color", 0)
             );
             // Accept both "entity_spawn" and legacy "mob_spawn" type strings.
             case "entity_spawn", "mob_spawn" -> new TimelineEvent.EntitySpawn(
                     tick, uuid,
                     optString(obj, "etype"),
                     optString(obj, "world"),
-                    optDouble(obj, "x", 0), optDouble(obj, "y", 0), optDouble(obj, "z", 0)
+                    optDouble(obj, "x", 0), optDouble(obj, "y", 0), optDouble(obj, "z", 0),
+                    optString(obj, "item")
             );
             case "entity_death" -> new TimelineEvent.EntityDeath(
                     tick, uuid,
@@ -340,6 +392,10 @@ public class TimelineEventAdapter implements JsonSerializer<TimelineEvent>, Json
         return obj.has(key) ? obj.get(key).getAsFloat() : def;
     }
 
+    private static boolean optBoolean(JsonObject obj, String key, boolean def) {
+        return obj.has(key) ? obj.get(key).getAsBoolean() : def;
+    }
+
     private static List<String> readStringList(JsonObject obj, String key) {
         if (!obj.has(key) || !obj.get(key).isJsonArray()) return List.of();
         JsonArray arr = obj.getAsJsonArray(key);
@@ -348,5 +404,30 @@ public class TimelineEventAdapter implements JsonSerializer<TimelineEvent>, Json
             list.add(el.isJsonNull() ? null : el.getAsString());
         }
         return list;
+    }
+
+    private static List<String> writeSerializedItemList(List<SerializedItemData> items) {
+        List<String> list = new ArrayList<>(items.size());
+        for (SerializedItemData item : items) {
+            list.add(writeSerializedItem(item));
+        }
+        return list;
+    }
+
+    private static String writeSerializedItem(SerializedItemData item) {
+        return item == null ? null : item.toBase64();
+    }
+
+    private static SerializedItemData readSerializedItem(JsonObject obj, String key) {
+        return SerializedItemData.fromBase64(optString(obj, key));
+    }
+
+    private static List<SerializedItemData> readSerializedItemList(JsonObject obj, String key) {
+        List<String> values = readStringList(obj, key);
+        List<SerializedItemData> items = new ArrayList<>(values.size());
+        for (String value : values) {
+            items.add(SerializedItemData.fromBase64(value));
+        }
+        return List.copyOf(items);
     }
 }

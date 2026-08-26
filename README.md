@@ -1,16 +1,17 @@
 # BetterReplay
 
-BetterReplay is a server-side replay plugin for Paper and Folia-style scheduling.
-It records player and nearby entity activity on the server, saves the timeline, and replays it for viewers in-game.
+BetterReplay is a server-side replay plugin for Paper with Folia-friendly scheduling through FoliaLib.
+It records player and nearby entity activity on the server, stores that timeline, and replays it in-game for viewers without requiring a client replay mod.
 
 ## What this project is
 
-- Server plugin written in Java
+- Server plugin written in Java 21
 - Targets modern Paper APIs
-- Uses PacketEvents and FoliaLib for packet handling and scheduling
-- Supports two storage backends:
-  - local JSON files
-  - MySQL
+- Uses PacketEvents for packet interception and replay entity updates
+- Uses FoliaLib for scheduler and teleport compatibility
+- Supports file and MySQL storage backends
+- Uses a short-lived replay-list cache for saved replay commands and API listing calls
+- New saves use finalized binary `.br` archives with Zstd-compressed payloads; legacy JSON replays and older LZ4 `.br` archives remain readable during the migration window, but pre-`v2` alpha `.br` inventory archives are intentionally unsupported
 
 ## How this differs from client-side replay mods
 
@@ -21,112 +22,59 @@ Server-side approach (this project):
 - No replay mod required on player clients
 - Captures server-observed gameplay state and events
 - Plays back by spawning and updating replay entities for a viewer
-- Good for moderation, event review, and server-side tooling
+- Fits moderation, event review, and server-side tooling workflows
 
 Typical client-side replay mod approach:
 - Records from a specific client perspective
 - Usually requires modded client setup
-- Often includes advanced free-camera/cinematic editing features
-- Playback is usually local to the client recording
+- Often focuses on free-camera or cinematic editing
+- Playback is usually local to the recording client
 
 In short: BetterReplay focuses on server-managed replay workflows and API-driven integration.
 
-## High-level architecture
-
-- Replay bootstrapping
-  - [src/main/java/me/justindevb/replay/Replay.java](src/main/java/me/justindevb/replay/Replay.java)
-- Public API entry point
-  - [src/main/java/me/justindevb/replay/api/ReplayAPI.java](src/main/java/me/justindevb/replay/api/ReplayAPI.java)
-  - [src/main/java/me/justindevb/replay/api/ReplayManager.java](src/main/java/me/justindevb/replay/api/ReplayManager.java)
-- Recording lifecycle
-  - [src/main/java/me/justindevb/replay/RecorderManager.java](src/main/java/me/justindevb/replay/RecorderManager.java)
-  - [src/main/java/me/justindevb/replay/RecordingSession.java](src/main/java/me/justindevb/replay/RecordingSession.java)
-- Replay playback lifecycle
-  - [src/main/java/me/justindevb/replay/ReplaySession.java](src/main/java/me/justindevb/replay/ReplaySession.java)
-- Storage abstraction and implementations
-  - [src/main/java/me/justindevb/replay/util/storage/ReplayStorage.java](src/main/java/me/justindevb/replay/util/storage/ReplayStorage.java)
-  - [src/main/java/me/justindevb/replay/util/storage/FileReplayStorage.java](src/main/java/me/justindevb/replay/util/storage/FileReplayStorage.java)
-  - [src/main/java/me/justindevb/replay/util/storage/MySQLReplayStorage.java](src/main/java/me/justindevb/replay/util/storage/MySQLReplayStorage.java)
-
 ## Features
 
-- Start and stop recordings
-- Save recordings to file or MySQL
-- List and delete stored replays
-- Replay sessions for viewers
+- Server-side recording and in-game playback with no client replay mod required
+- Finalized binary `.br` replay archives stored in either file or MySQL backends
+- Crash/restart-safe append-log recording with startup recovery of orphaned temporary saves
+- Replay protection, retention cleanup, chunk-aware filtered export, and hidden admin diagnostics
+- Optional chunk-aware recording and playback for block baselines around recorded players
+- Playback controls with pause stepping, variable speed, and live speed feedback
+- Viewer safety controls, viewer state restoration, and optional live-player vanish during playback
+- Velocity replay handoff for launching playback on a dedicated backend server and returning viewers afterward
+- ViaVersion proxy client-version details for correct replay player skin metadata on backend servers
 - API-first integration support for other plugins
 - Optional Floodgate soft dependency support
 
-## Commands and permissions
+## Velocity replay handoff
 
-Registered command and permissions are defined in:
-- [src/main/resources/plugin.yml](src/main/resources/plugin.yml)
+BetterReplay can move viewers to another Velocity backend for playback with `/replay play <name> server:<backend>` or a configured `Velocity.Default-Replay-Server`, then return them to their original server when the replay ends.
 
-Base command:
-- /replay
+This lets a network keep replay viewing isolated on dedicated replay servers while production servers continue recording. Shared MySQL storage is recommended so the origin and replay backend can access the same saved replay list and payloads. Failed or unacknowledged handoffs report a chat error to the viewer.
 
-Subcommands:
-- start
-- stop
-- play
-- list
-- delete
+## ViaVersion proxy details
 
-Permissions:
-- replay.start
-- replay.stop
-- replay.play
-- replay.list
-- replay.delete
-- replay.*
+When a ViaVersion proxy sends `vv:proxy_details`, BetterReplay uses its reported client protocol version for replay player skin metadata instead of the backend's local protocol detection. This handles networks where backend ViaVersion sees the proxy connection protocol rather than the player's actual client version. The proxy must run ViaVersion 5.7.2 or newer with `send-player-details: true`; absent or invalid payloads fall back to PacketEvents detection.
+
+## Architecture
+
+The plugin is organized around a bootstrap layer, a recording pipeline, a playback pipeline, a storage abstraction, and operator tooling for export, diagnostics, benchmarking, and retention.
+
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the source map, lifecycle walkthrough, chunk pipeline, viewer safety flow, and threading notes.
 
 ## Configuration
 
-Default config keys are initialized in:
-- [src/main/java/me/justindevb/replay/Replay.java](src/main/java/me/justindevb/replay/Replay.java)
+Configuration is defined through typed settings in `ReplayConfigSetting`, with explicit runtime reload scopes surfaced by `/replay reload`.
 
-### Storage-Type options
+See [docs/CONFIGURATION.md](docs/CONFIGURATION.md) for defaults, valid values, file/MySQL examples, reload behavior, and operational notes.
 
-Valid values for `General.Storage-Type` are:
+## Commands
 
-- `file`
-  - Stores replay data as JSON files under the plugin data folder.
-- `mysql`
-  - Stores replay data in a MySQL table (`replays`) using the configured `General.MySQL.*` values.
+All player and admin actions live under `/replay`, including the normal recording/playback workflow plus hidden export, debug, and benchmark utilities.
 
-These values should be lowercase as shown above.
+Replay and recording names must be 1-64 characters long and may not contain control characters or `\ / : * ? " < > | §`.
 
-### File storage example
-
-```yaml
-General:
-  Check-Update: true
-  Storage-Type: file
-```
-
-### MySQL storage example
-
-```yaml
-General:
-  Check-Update: true
-  Storage-Type: mysql
-  MySQL:
-    host: 127.0.0.1
-    port: 3306
-    database: betterreplay
-    user: replay_user
-    password: change-me
-```
-
-Additional key used by command pagination:
-
-```yaml
-list-page-size: 10
-```
-
-Notes:
-- If Storage-Type is invalid, plugin falls back to file storage.
-- MySQL replay names are stored in a VARCHAR(64) primary key column.
+See [docs/COMMANDS.md](docs/COMMANDS.md) for syntax, permissions, console support, replay-name parsing rules, and output locations.
 
 ## Build from source
 
@@ -141,11 +89,11 @@ mvn -DskipTests package
 ```
 
 Output jar:
-- target/BetterReplay-<version>.jar
+- `target/BetterReplay-<version>.jar`
 
 ## API
 
-BetterReplay provides a public API for other plugins to start/stop recordings, manage replays, and listen for lifecycle events.
+BetterReplay provides a public API for other plugins to start and stop recordings, manage saved replays, and listen for lifecycle events.
 
 Quick example:
 
@@ -156,7 +104,32 @@ manager.stopRecording("demo-session", true);
 manager.startReplay("demo-session", viewerPlayer);
 ```
 
-For full documentation of every method, all events, and a complete example plugin, see the **[API Documentation](docs/API.md)**.
+For full documentation of every method, all events, and a complete example plugin, see [docs/API.md](docs/API.md).
+
+## Documentation
+
+Primary docs:
+
+- [docs/API.md](docs/API.md) - public API reference
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) - component layout, lifecycle, and threading model
+- [docs/CONFIGURATION.md](docs/CONFIGURATION.md) - config keys, defaults, reload scopes, and examples
+- [docs/COMMANDS.md](docs/COMMANDS.md) - command syntax, permissions, and admin utilities
+- [docs/BENCHMARKS.md](docs/BENCHMARKS.md) - benchmark command usage, workload presets, and metric definitions
+- [docs/BINARY_FORMAT_SPEC.md](docs/BINARY_FORMAT_SPEC.md) - binary replay payload and archive structure notes, including the current `v2` inventory/event split
+- [docs/ARCHIVE_MANIFEST_SCHEMA.md](docs/ARCHIVE_MANIFEST_SCHEMA.md) - `manifest.json` field definitions and validation rules
+- [docs/DEPRECATIONS.md](docs/DEPRECATIONS.md) - planned feature and compatibility removals
+- [docs/planning](docs/planning) - design notes, comparisons, and implementation planning documents
+
+Binary replay note:
+- Finalized `.br` archives store the recording start wall-clock timestamp in `manifest.json` as `recordingStartedAtEpochMillis`.
+- Active temp append logs also write a fixed file header carrying the same timestamp so final saves can preserve it after crash-safe recovery.
+- Current `.br` archives use format version `2` and store equipment-state and storage-inventory payloads as separate raw item-byte records.
+- New `.br` archives write `replay.bin` and chunk payloads with Zstd level 1 while preserving read compatibility with existing LZ4 archives; Zstd archives require the current binary compatibility floor.
+- Chunk-enabled `.br` archives may also include `chunks/` region entries containing palette-compressed chunk baselines that are decoded lazily during playback.
+
+## Changelog
+
+A full history of changes, additions, and fixes is tracked in [CHANGELOG.md](CHANGELOG.md), following [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Development workflow
 

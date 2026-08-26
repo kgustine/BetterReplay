@@ -1,6 +1,15 @@
 package me.justindevb.replay;
 
 import me.justindevb.replay.api.ReplayManager;
+import me.justindevb.replay.benchmark.ReplayBenchmarkCommand;
+import me.justindevb.replay.config.ReplayConfigReloadResult;
+import me.justindevb.replay.config.ReplayConfigSetting;
+import me.justindevb.replay.debug.ReplayDebugCommand;
+import me.justindevb.replay.export.ReplayExportCommand;
+import me.justindevb.replay.storage.ReplayDeleteResult;
+import me.justindevb.replay.storage.ReplaySummary;
+import me.justindevb.replay.util.ReplayMessages;
+import me.justindevb.replay.util.ReplayNames;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.event.ClickEvent;
 import net.kyori.adventure.text.event.HoverEvent;
@@ -15,28 +24,67 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.stream.Collectors;
 import java.util.logging.Level;
 
 public class ReplayCommand implements CommandExecutor, TabCompleter {
+    private static final String DEFAULT_LIST_PROTECTED_COLOR = "\u00A76";
+    private static final char LEGACY_COLOR_CODE_CHAR = '\u00A7';
+    private static final String LEGACY_COLOR_CODES = "0123456789AaBbCcDdEeFfKkLlMmNnOoRrXx";
+
     private final ReplayManager replayManager;
+    private final ReplayBenchmarkCommand replayBenchmarkCommand;
+    private final ReplayExportCommand replayExportCommand;
+    private final ReplayDebugCommand replayDebugCommand;
 
     public ReplayCommand(ReplayManager replayManager) {
+        this(replayManager, null, null, null);
+    }
+
+    ReplayCommand(ReplayManager replayManager, ReplayBenchmarkCommand replayBenchmarkCommand, ReplayExportCommand replayExportCommand,
+                  ReplayDebugCommand replayDebugCommand) {
         this.replayManager = replayManager;
+        this.replayBenchmarkCommand = replayBenchmarkCommand;
+        this.replayExportCommand = replayExportCommand;
+        this.replayDebugCommand = replayDebugCommand;
     }
 
     @Override
     public boolean onCommand(CommandSender sender, Command cmd, String label, String[] args) {
-        if (!(sender instanceof Player p)) {
-            sender.sendMessage("Must be a player to execute this command");
-            return true;
+        if (args.length > 0 && args[0].equalsIgnoreCase("export") && replayExportCommand != null) {
+            return replayExportCommand.handle(sender, args);
+        }
+        if (args.length > 0 && args[0].equalsIgnoreCase("benchmark") && replayBenchmarkCommand != null) {
+            return replayBenchmarkCommand.handle(sender, args);
+        }
+        if (args.length > 0 && args[0].equalsIgnoreCase("debug") && replayDebugCommand != null) {
+            return replayDebugCommand.handle(sender, args);
         }
 
         if (args.length == 0) {
+            if (!(sender instanceof Player p)) {
+                sender.sendMessage("Must be a player to execute this command");
+                return true;
+            }
             sendHelp(p);
             return true;
         }
 
-        switch (args[0].toLowerCase()) {
+        String subcommand = args[0].toLowerCase();
+
+        if (!(sender instanceof Player p)) {
+            return switch (subcommand) {
+                case "protect" -> handleProtect(sender, args, "console");
+                case "unprotect" -> handleUnprotect(sender, args);
+                case "reload" -> handleReload(sender);
+                default -> {
+                    sender.sendMessage("Must be a player to execute this command");
+                    yield true;
+                }
+            };
+        }
+
+        switch (subcommand) {
             case "start" -> {
                 if (!p.hasPermission("replay.start")) {
                     p.sendMessage("You do not have permission");
@@ -48,6 +96,11 @@ public class ReplayCommand implements CommandExecutor, TabCompleter {
                 }
 
                 String sessionName = args[1];
+                java.util.Optional<String> invalidSessionName = ReplayNames.validateRecordingName(sessionName);
+                if (invalidSessionName.isPresent()) {
+                    p.sendMessage("§c" + invalidSessionName.get());
+                    return true;
+                }
                 int duration = -1;
 
                 try {
@@ -65,7 +118,7 @@ public class ReplayCommand implements CommandExecutor, TabCompleter {
                     if (target != null) {
                         targets.add(target);
                     } else {
-                        p.sendMessage("§cPlayer not found: " + pn);
+                        ReplayMessages.send(p, "§cPlayer not found: " + pn);
                     }
                 }
 
@@ -75,8 +128,8 @@ public class ReplayCommand implements CommandExecutor, TabCompleter {
                 }
 
                 if (replayManager.startRecording(sessionName, targets, duration)) {
-                    p.sendMessage("§aStarted recording session: " + sessionName + " (" +
-                            (duration == -1 ? "∞" : duration + "s") + ")");
+                    ReplayMessages.send(p, "§aStarted recording session: " + sessionName + " ("
+                            + (duration == -1 ? "∞" : duration + "s") + ")");
                 } else {
                     p.sendMessage("§cSession with that name already exists!");
                 }
@@ -91,23 +144,138 @@ public class ReplayCommand implements CommandExecutor, TabCompleter {
                     return true;
                 }
                 String sessionName = joinArgs(args, 1);
+                java.util.Optional<String> invalidSessionName = ReplayNames.validateRecordingName(sessionName);
+                if (invalidSessionName.isPresent()) {
+                    p.sendMessage("§c" + invalidSessionName.get());
+                    return true;
+                }
                 if (replayManager.stopRecording(sessionName, true)) {
-                    p.sendMessage("§aStopped recording session: " + sessionName);
+                    ReplayMessages.send(p, "§aStopped recording session: " + sessionName);
                 } else {
                     p.sendMessage("§cNo active session with that name!");
                 }
             }
             case "play" -> {
+
                 if (!p.hasPermission("replay.play")) {
                     p.sendMessage("You do not have permission");
                     return true;
                 }
+
                 if (args.length < 2) {
-                    p.sendMessage("§c/replay play <name>");
+                    p.sendMessage("§c/replay play <name> [server:<server>]");
                     return true;
                 }
-                String replayName = joinArgs(args, 1);
-                replayManager.startReplay(replayName, p);
+
+                String replayName = args[1];
+                java.util.Optional<String> invalidReplayName = ReplayNames.validateReplayName(replayName);
+                if (invalidReplayName.isPresent()) {
+                    p.sendMessage("§c" + invalidReplayName.get());
+                    return true;
+                }
+
+                String foundTargetServer = null;
+
+                for (int i = 2; i < args.length; i++) {
+
+                    String arg = args[i];
+
+                    if (arg.regionMatches(
+                            true,
+                            0,
+                            "server:",
+                            0,
+                            "server:".length()
+                    )) {
+
+                        String server =
+                                arg.substring("server:".length())
+                                        .trim();
+
+                        if (!server.isEmpty()) {
+                            foundTargetServer = server;
+                        }
+
+                        break;
+                    }
+                }
+
+                Replay plugin = Replay.getInstance();
+
+                // Must be effectively final for lambda usage
+                final String targetServer = foundTargetServer != null
+                        ? foundTargetServer
+                        : configuredDefaultReplayServer(plugin);
+
+                plugin.getReplayStorage()
+                        .replayExists(replayName)
+                        .thenAccept(exists -> {
+
+                            if (!exists) {
+
+                                plugin.getFoliaLib()
+                                        .getScheduler()
+                                        .runLater(
+                                                () -> ReplayMessages.send(p, "§cReplay not found: " + replayName),
+                                                1L
+                                        );
+
+                                return;
+                            }
+
+                            if (targetServer == null) {
+
+                                replayManager.startReplay(
+                                        replayName,
+                                        p
+                                );
+
+                                return;
+                            }
+
+                            plugin.getFoliaLib()
+                                    .getScheduler()
+                                    .runLater(
+                                            () -> {
+                                                boolean transferRequested = plugin.getTransferManager()
+                                                        .requestReplayTransfer(
+                                                                p,
+                                                                replayName,
+                                                                targetServer
+                                                        );
+
+                                                if (!transferRequested) {
+                                                    return;
+                                                }
+
+                                                ReplayMessages.send(p, "§aConnecting to replay server §e"
+                                                        + targetServer
+                                                        + "§a...");
+                                            },
+                                            1L
+                                    );
+
+                        })
+                        .exceptionally(ex -> {
+
+                            plugin.getLogger().log(
+                                    Level.SEVERE,
+                                    "Failed to verify replay existence: "
+                                            + replayName,
+                                    ex
+                            );
+
+                            plugin.getFoliaLib()
+                                    .getScheduler()
+                                    .runLater(
+                                            () -> p.sendMessage(
+                                                    "§cFailed to load replay information."
+                                            ),
+                                            1L
+                                    );
+
+                            return null;
+                        });
 
                 return true;
             }
@@ -130,14 +298,17 @@ public class ReplayCommand implements CommandExecutor, TabCompleter {
 
                 final int page = parsedPage;
 
-                replayManager.listSavedReplays()
+                replayManager.listSavedReplaySummaries()
                         .thenAccept(replays -> Bukkit.getScheduler().runTask(Replay.getInstance(), () -> {
                             if (replays.isEmpty()) {
                                 p.sendMessage("§cNo replays found.");
                                 return;
                             }
 
-                            int perPage = Replay.getInstance().getConfig().getInt("list-page-size", 10);
+                            Replay plugin = Replay.getInstance();
+                            int perPage = ReplayConfigSetting.LIST_PAGE_SIZE.getInt(plugin.getConfig());
+                            String protectedHighlightColor = resolveConfiguredColor(
+                                    ReplayConfigSetting.LIST_PROTECTED_HIGHLIGHT_COLOR.getString(plugin.getConfig()));
                             int totalPages = (int) Math.ceil((double) replays.size() / perPage);
 
                             if (page > totalPages) {
@@ -150,7 +321,7 @@ public class ReplayCommand implements CommandExecutor, TabCompleter {
 
                             p.sendMessage("§6Replays §7(Page " + page + "/" + totalPages + ")");
                             for (int i = from; i < to; i++) {
-                                p.sendMessage("§e- §f" + replays.get(i));
+                                ReplayMessages.send(p, "§e- " + formatReplayListName(replays.get(i), protectedHighlightColor));
                             }
 
                             Component navigation = Component.empty();
@@ -197,26 +368,42 @@ public class ReplayCommand implements CommandExecutor, TabCompleter {
                     return true;
                 }
                 String name = joinArgs(args, 1);
+                java.util.Optional<String> invalidReplayName = ReplayNames.validateReplayName(name);
+                if (invalidReplayName.isPresent()) {
+                    p.sendMessage("§c" + invalidReplayName.get());
+                    return true;
+                }
                 replayManager.deleteSavedReplay(name)
-                        .thenAccept(success -> {
+                        .thenAccept(result -> {
                             Replay.getInstance().getFoliaLib().getScheduler().runNextTick(task -> {
-                                if (success) {
-                                    p.sendMessage("§aDeleted replay: " + name);
+                                if (result == ReplayDeleteResult.DELETED) {
+                                    ReplayMessages.send(p, "§aDeleted replay: " + name);
+                                } else if (result == ReplayDeleteResult.PROTECTED) {
+                                    ReplayMessages.send(p, "§cReplay is protected and must be unprotected before deletion: " + name);
                                 } else {
-                                    p.sendMessage("§cReplay not found: " + name);
+                                    ReplayMessages.send(p, "§cReplay not found: " + name);
                                 }
                             });
                         })
                         .exceptionally(ex -> {
                             Replay.getInstance().getLogger().log(Level.SEVERE, "Failed to delete replay: " + name, ex);
                             Replay.getInstance().getFoliaLib().getScheduler().runNextTick(task ->
-                                    p.sendMessage("§cFailed to delete replay: " + name));
+                                    ReplayMessages.send(p, "§cFailed to delete replay: " + name));
                             return null;
                         });
                         return true;
             }
+            case "protect" -> {
+                return handleProtect(sender, args, p.getName());
+            }
+            case "unprotect" -> {
+                return handleUnprotect(sender, args);
+            }
+            case "reload" -> {
+                return handleReload(sender);
+            }
             default -> {
-                p.sendMessage("§cUnknown subcommand: §f" + args[0]);
+                ReplayMessages.send(p, "§cUnknown subcommand: §f" + args[0]);
                 sendHelp(p);
             }
         }
@@ -235,15 +422,33 @@ public class ReplayCommand implements CommandExecutor, TabCompleter {
             }
         }
         if (p.hasPermission("replay.play"))
-            p.sendMessage("§e/replay play <name> §7- Play a saved replay");
+            p.sendMessage("§e/replay play <name> [server:<server>] §7- Play a saved replay");
         if (p.hasPermission("replay.list"))
             p.sendMessage("§e/replay list [page] §7- List saved replays");
         if (p.hasPermission("replay.delete"))
             p.sendMessage("§e/replay delete <name> §7- Delete a saved replay");
+        if (p.hasPermission("replay.protect"))
+            p.sendMessage("§e/replay protect <name> §7- Protect a replay from deletion");
+        if (p.hasPermission("replay.unprotect"))
+            p.sendMessage("§e/replay unprotect <name> §7- Remove replay deletion protection");
+        if (p.hasPermission("replay.reload"))
+            p.sendMessage("§e/replay reload §7- Reload config and restart retention tasks");
     }
 
     @Override
     public List<String> onTabComplete(CommandSender sender, Command cmd, String alias, String[] args) {
+
+        if (args.length > 0 && args[0].equalsIgnoreCase("export") && replayExportCommand != null) {
+            return replayExportCommand.tabComplete(sender, args);
+        }
+
+        if (args.length > 0 && args[0].equalsIgnoreCase("benchmark") && replayBenchmarkCommand != null) {
+            return replayBenchmarkCommand.tabComplete(sender, args);
+        }
+
+        if (args.length > 0 && args[0].equalsIgnoreCase("debug") && replayDebugCommand != null) {
+            return replayDebugCommand.tabComplete(sender, args);
+        }
 
         if (args.length == 1) {
             List<String> completions = new ArrayList<>();
@@ -253,13 +458,17 @@ public class ReplayCommand implements CommandExecutor, TabCompleter {
             if (sender.hasPermission("replay.play")) completions.add("play");
             if (sender.hasPermission("replay.delete")) completions.add("delete");
             if (sender.hasPermission("replay.list")) completions.add("list");
+            if (sender.hasPermission("replay.protect")) completions.add("protect");
+            if (sender.hasPermission("replay.unprotect")) completions.add("unprotect");
+                if (sender.hasPermission("replay.reload")) completions.add("reload");
 
             return completions.stream()
                     .filter(s -> s.startsWith(args[0].toLowerCase()))
                     .toList();
         }
 
-        if (args.length >= 2 && (args[0].equalsIgnoreCase("delete") || args[0].equalsIgnoreCase("play"))) {
+        if (args.length >= 2 && (args[0].equalsIgnoreCase("delete") || args[0].equalsIgnoreCase("play")
+            || args[0].equalsIgnoreCase("protect") || args[0].equalsIgnoreCase("unprotect"))) {
             if (!sender.hasPermission("replay." + args[0].toLowerCase()))
                 return Collections.emptyList();
 
@@ -346,6 +555,154 @@ public class ReplayCommand implements CommandExecutor, TabCompleter {
             return "";
         }
         return String.join(" ", Arrays.copyOfRange(args, fromIndex, args.length)).trim();
+    }
+
+    private boolean handleReload(CommandSender sender) {
+        if (!sender.hasPermission("replay.reload")) {
+            sender.sendMessage("You do not have permission");
+            return true;
+        }
+
+        Replay plugin = Replay.getInstance();
+        ReplayConfigReloadResult result = plugin.reloadRuntimeConfig();
+
+        sender.sendMessage("§aReloaded BetterReplay config.");
+        if (result.retentionServiceRestarted()) {
+            if (result.retentionRestartChanges().isEmpty()) {
+                sender.sendMessage("§7Retention service restarted.");
+            } else {
+                sender.sendMessage("§7Retention service restarted for: " + formatSettings(result.retentionRestartChanges()));
+            }
+        }
+        if (!result.immediateChanges().isEmpty()) {
+            sender.sendMessage("§7Applied immediately: " + formatSettings(result.immediateChanges()));
+        }
+        if (!result.newSessionChanges().isEmpty()) {
+            sender.sendMessage("§7Affects new recordings/replays only: " + formatSettings(result.newSessionChanges()));
+        }
+        if (!result.futureChanges().isEmpty()) {
+            sender.sendMessage("§7Applies to future startup/manual checks: " + formatSettings(result.futureChanges()));
+        }
+        if (!result.restartRequiredChanges().isEmpty()) {
+            sender.sendMessage("§7Still requires restart: " + formatSettings(result.restartRequiredChanges()));
+        }
+        if (!result.hasVisibleChanges()) {
+            sender.sendMessage("§7No runtime-facing config value changes were detected.");
+        }
+
+        return true;
+    }
+
+    private String formatSettings(List<ReplayConfigSetting> settings) {
+        return settings.stream()
+                .map(ReplayConfigSetting::getKey)
+                .collect(Collectors.joining(", "));
+    }
+
+    private String configuredDefaultReplayServer(Replay plugin) {
+        String configured = ReplayConfigSetting.VELOCITY_DEFAULT_REPLAY_SERVER.getString(plugin.getConfig());
+        if (configured == null || configured.isBlank()) {
+            return null;
+        }
+        return configured.trim();
+    }
+
+    private String formatReplayListName(ReplaySummary replay, String protectedHighlightColor) {
+        if (replay.protectedFromDeletion()) {
+            return protectedHighlightColor + replay.name();
+        }
+        return "§f" + replay.name();
+    }
+
+    private String resolveConfiguredColor(String configuredColor) {
+        if (configuredColor == null || configuredColor.isBlank()) {
+            return DEFAULT_LIST_PROTECTED_COLOR;
+        }
+
+        String translated = translateLegacyColorCodes(configuredColor.trim());
+        return translated.indexOf(LEGACY_COLOR_CODE_CHAR) >= 0 ? translated : DEFAULT_LIST_PROTECTED_COLOR;
+    }
+
+    private String translateLegacyColorCodes(String input) {
+        StringBuilder translated = new StringBuilder(input.length());
+        for (int index = 0; index < input.length(); index++) {
+            char current = input.charAt(index);
+            if (current == '&' && index + 1 < input.length() && isLegacyColorCode(input.charAt(index + 1))) {
+                translated.append(LEGACY_COLOR_CODE_CHAR).append(Character.toLowerCase(input.charAt(index + 1)));
+                index++;
+                continue;
+            }
+            translated.append(current);
+        }
+        return translated.toString();
+    }
+
+    private boolean isLegacyColorCode(char code) {
+        return LEGACY_COLOR_CODES.indexOf(code) >= 0;
+    }
+
+    private boolean handleProtect(CommandSender sender, String[] args, String protectedBy) {
+        if (!sender.hasPermission("replay.protect")) {
+            sender.sendMessage("You do not have permission");
+            return true;
+        }
+        if (args.length < 2) {
+            sender.sendMessage("Usage: /replay protect <name>");
+            return true;
+        }
+
+        String name = joinArgs(args, 1);
+        java.util.Optional<String> invalidReplayName = ReplayNames.validateReplayName(name);
+        if (invalidReplayName.isPresent()) {
+            sender.sendMessage("§c" + invalidReplayName.get());
+            return true;
+        }
+        replayManager.protectSavedReplay(name, protectedBy)
+                .thenAccept(result -> sendMessageNextTick(sender, switch (result) {
+                    case UPDATED -> "§aProtected replay: " + name;
+                    case ALREADY_PROTECTED -> "§eReplay is already protected: " + name;
+                    case ALREADY_UNPROTECTED, NOT_FOUND -> "§cReplay not found: " + name;
+                }))
+                .exceptionally(ex -> {
+                    Replay.getInstance().getLogger().log(Level.SEVERE, "Failed to protect replay: " + name, ex);
+                    sendMessageNextTick(sender, "§cFailed to protect replay: " + name);
+                    return null;
+                });
+        return true;
+    }
+
+    private boolean handleUnprotect(CommandSender sender, String[] args) {
+        if (!sender.hasPermission("replay.unprotect")) {
+            sender.sendMessage("You do not have permission");
+            return true;
+        }
+        if (args.length < 2) {
+            sender.sendMessage("Usage: /replay unprotect <name>");
+            return true;
+        }
+
+        String name = joinArgs(args, 1);
+        java.util.Optional<String> invalidReplayName = ReplayNames.validateReplayName(name);
+        if (invalidReplayName.isPresent()) {
+            sender.sendMessage("§c" + invalidReplayName.get());
+            return true;
+        }
+        replayManager.unprotectSavedReplay(name)
+                .thenAccept(result -> sendMessageNextTick(sender, switch (result) {
+                    case UPDATED -> "§aUnprotected replay: " + name;
+                    case ALREADY_UNPROTECTED -> "§eReplay is already unprotected: " + name;
+                    case ALREADY_PROTECTED, NOT_FOUND -> "§cReplay not found: " + name;
+                }))
+                .exceptionally(ex -> {
+                    Replay.getInstance().getLogger().log(Level.SEVERE, "Failed to unprotect replay: " + name, ex);
+                    sendMessageNextTick(sender, "§cFailed to unprotect replay: " + name);
+                    return null;
+                });
+        return true;
+    }
+
+    private void sendMessageNextTick(CommandSender sender, String message) {
+        Replay.getInstance().getFoliaLib().getScheduler().runNextTick(task -> ReplayMessages.send(sender, message));
     }
 
 }

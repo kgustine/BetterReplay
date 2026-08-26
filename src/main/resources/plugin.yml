@@ -1,7 +1,7 @@
 name: ${project.artifactId}
 main: ${mainClass}
 version: ${project.version}
-author: ${author}
+authors: [JustinDevB, DriftN2Forty]
 depend: [packetevents]
 softdepend: [Floodgate]
 api-version: 1.13
@@ -18,7 +18,13 @@ permissions:
       replay.stop: true
       replay.list: true
       replay.delete: true
+      replay.protect: true
+      replay.unprotect: true
       replay.play: true
+      replay.export: true
+      replay.benchmark: true
+      replay.debug: true
+      replay.reload: true
   replay.start:
     description: Allows starting a new recording
     default: op
@@ -33,4 +39,22 @@ permissions:
     default: op
   replay.delete:
     description: Allows deleting saved replays
+    default: op
+  replay.protect:
+    description: Allows protecting saved replays from deletion
+    default: op
+  replay.unprotect:
+    description: Allows removing replay deletion protection
+    default: op
+  replay.export:
+    description: Allows running the hidden replay export command
+    default: op
+  replay.benchmark:
+    description: Allows running the hidden replay benchmark command
+    default: op
+  replay.debug:
+    description: Allows running the hidden replay debug dump command
+    default: op
+  replay.reload:
+    description: Allows reloading BetterReplay config at runtime
     default: op
