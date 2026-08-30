@@ -5,6 +5,7 @@ import me.justindevb.replay.api.ReplayExportQuery;
 import me.justindevb.replay.debug.ReplayDumpQuery;
 import me.justindevb.replay.recording.TimelineEvent;
 import me.justindevb.replay.storage.binary.BinaryReplayFormat;
+import me.justindevb.replay.storage.binary.BinaryReplayReadLimits;
 import me.justindevb.replay.storage.binary.BinaryReplayStorageCodec;
 import me.justindevb.replay.util.ReplayNames;
 import me.justindevb.replay.util.io.ReplayCompressor;
@@ -27,9 +28,14 @@ public class FileReplayStorage implements ReplayStorage {
     private final ReplayExporter replayExporter;
     private final ReplayDumpWriter replayDumpWriter;
     private final FileReplayProtectionStore protectionStore;
+    private final int maximumStoredArchiveBytes;
 
     public FileReplayStorage(Replay replay) {
-        this(replay, new BinaryReplayStorageCodec(), defaultFormatDetector());
+        this(replay, BinaryReplayReadLimits.MAX_STORED_ARCHIVE_BYTES);
+    }
+
+    FileReplayStorage(Replay replay, int maximumStoredArchiveBytes) {
+        this(replay, new BinaryReplayStorageCodec(), defaultFormatDetector(), maximumStoredArchiveBytes);
     }
 
     private static ReplayFormatDetector defaultFormatDetector() {
@@ -37,12 +43,18 @@ public class FileReplayStorage implements ReplayStorage {
     }
 
     FileReplayStorage(Replay replay, ReplayStorageCodec saveCodec, ReplayFormatDetector formatDetector) {
+        this(replay, saveCodec, formatDetector, BinaryReplayReadLimits.MAX_STORED_ARCHIVE_BYTES);
+    }
+
+    private FileReplayStorage(Replay replay, ReplayStorageCodec saveCodec, ReplayFormatDetector formatDetector,
+                              int maximumStoredArchiveBytes) {
         this.replay = replay;
         this.saveCodec = saveCodec;
         this.formatDetector = formatDetector;
         this.replayExporter = new ReplayExporter(new File(replay.getDataFolder(), "exports"));
         this.replayDumpWriter = new ReplayDumpWriter(new File(replay.getDataFolder(), "dumps"));
         this.protectionStore = new FileReplayProtectionStore(replay.getDataFolder());
+        this.maximumStoredArchiveBytes = maximumStoredArchiveBytes;
         this.replayFolder = new File(replay.getDataFolder(), "replays");
         if (!replayFolder.exists())
             replayFolder.mkdirs();
@@ -75,6 +87,18 @@ public class FileReplayStorage implements ReplayStorage {
     private byte[] encodeForStorage(String name, ReplaySaveRequest request) throws IOException {
         byte[] payload = saveCodec.finalizeReplay(name, request, replay.getPluginMeta().getVersion());
         return usesCodecCompression() ? ReplayCompressor.compress(new String(payload, java.nio.charset.StandardCharsets.UTF_8)) : payload;
+    }
+
+    private byte[] readReplayBytes(File file) throws IOException {
+        long fileSize = Files.size(file.toPath());
+        if (fileSize > maximumStoredArchiveBytes) {
+            throw new IOException("Replay archive " + file.getName() + " exceeds the limit of "
+                    + maximumStoredArchiveBytes + " bytes");
+        }
+        try (InputStream input = Files.newInputStream(file.toPath())) {
+            return BinaryReplayReadLimits.readAllBytes(
+                    input, maximumStoredArchiveBytes, "Replay archive " + file.getName());
+        }
     }
 
     private void removeLegacyJsonVariants(String name, String retainedExtension) {
@@ -122,7 +146,7 @@ public class FileReplayStorage implements ReplayStorage {
             if (file == null) return null;
 
             try {
-                byte[] bytes = Files.readAllBytes(file.toPath());
+                byte[] bytes = readReplayBytes(file);
                 ReplayStorageCodec codec = formatDetector.detectCodec(file.getName(), bytes);
                 return codec.decodeReplayData(bytes, replay.getPluginMeta().getVersion());
             } catch (IOException e) {
@@ -192,7 +216,7 @@ public class FileReplayStorage implements ReplayStorage {
     }
 
     private Instant resolveCreatedAt(String replayName, File file) throws IOException {
-        byte[] bytes = Files.readAllBytes(file.toPath());
+        byte[] bytes = readReplayBytes(file);
         ReplayStorageCodec codec = formatDetector.detectCodec(file.getName(), bytes);
         ReplayInspection inspection = codec.inspectReplay(replayName, bytes, replay.getPluginMeta().getVersion());
         if (inspection.recordingStartedAtEpochMillis() != null && inspection.recordingStartedAtEpochMillis() > 0) {
@@ -280,7 +304,7 @@ public class FileReplayStorage implements ReplayStorage {
             }
 
             try {
-                byte[] bytes = Files.readAllBytes(file.toPath());
+                byte[] bytes = readReplayBytes(file);
                 ReplayStorageCodec codec = formatDetector.detectCodec(file.getName(), bytes);
                 return codec.writeReplayFile(name, bytes, replay.getPluginMeta().getVersion());
             } catch (IOException e) {
@@ -298,7 +322,7 @@ public class FileReplayStorage implements ReplayStorage {
             }
 
             try {
-                byte[] bytes = Files.readAllBytes(file.toPath());
+                byte[] bytes = readReplayBytes(file);
                 ReplayStorageCodec codec = formatDetector.detectCodec(file.getName(), bytes);
                 return replayExporter.exportReplay(name, codec.decodeReplayData(bytes, replay.getPluginMeta().getVersion()), query,
                         replay.getPluginMeta().getVersion());
@@ -317,7 +341,7 @@ public class FileReplayStorage implements ReplayStorage {
             }
 
             try {
-                byte[] bytes = Files.readAllBytes(file.toPath());
+                byte[] bytes = readReplayBytes(file);
                 ReplayStorageCodec codec = formatDetector.detectCodec(file.getName(), bytes);
                 return codec.inspectReplay(name, bytes, replay.getPluginMeta().getVersion());
             } catch (IOException e) {
@@ -335,7 +359,7 @@ public class FileReplayStorage implements ReplayStorage {
             }
 
             try {
-                byte[] bytes = Files.readAllBytes(file.toPath());
+                byte[] bytes = readReplayBytes(file);
                 ReplayStorageCodec codec = formatDetector.detectCodec(file.getName(), bytes);
                 return replayDumpWriter.writeDump(name, codec.decodeTimeline(bytes, replay.getPluginMeta().getVersion()), query);
             } catch (IOException e) {

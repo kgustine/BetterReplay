@@ -104,6 +104,20 @@ class ReplayChunkPlaybackCacheTest {
     }
 
     @Test
+    void loadChunk_returnsEmptyWhenDecodedLengthDoesNotMatchIndex() throws Exception {
+        byte[] payload = payloadCodec.encode(0, 1, List.of("minecraft:stone"), new short[16 * 16]);
+        byte[] regionBytes = regionCodec.encode(List.of(new BinaryChunkRegionEntry(
+                0, 0, payload.length + 1, BinaryChunkCompression.LZ4_FRAME, compress(payload))));
+        ReplayChunkData chunkData = new ReplayChunkData(
+                BinaryReplayChunkMetadata.present(1, 1, "abcd"),
+                Map.of("chunks/world/r.0.0.brregion", regionBytes));
+
+        assertTrue(new ReplayChunkPlaybackCache(chunkData)
+                .loadChunk(new ChunkCoordinate("world", 0, 0))
+                .isEmpty());
+    }
+
+    @Test
     void loadChunk_decodesPacketFriendlySnapshotWhenArchiveUsesBrcp() throws Exception {
         BinaryPacketFriendlyChunkPayloadCodec.PacketFriendlyChunkPayload payload =
             new BinaryPacketFriendlyChunkPayloadCodec.PacketFriendlyChunkPayload(

@@ -31,6 +31,13 @@ public enum BinaryChunkCompression {
         return payloadCompression.decompress(compressedPayload);
     }
 
+    public byte[] decompress(byte[] compressedPayload, int expectedLength) throws IOException {
+        if (compressedPayload != null && compressedPayload.length > BinaryReplayReadLimits.MAX_CHUNK_REGION_BYTES) {
+            throw new IOException("Compressed chunk payload exceeds the permitted size");
+        }
+        return payloadCompression.decompress(compressedPayload, expectedLength);
+    }
+
     public static BinaryChunkCompression fromCodecId(int codecId) throws IOException {
         for (BinaryChunkCompression compression : values()) {
             if (compression.codecId == codecId) {

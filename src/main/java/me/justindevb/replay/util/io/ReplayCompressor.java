@@ -1,5 +1,7 @@
 package me.justindevb.replay.util.io;
 
+import me.justindevb.replay.storage.binary.BinaryReplayReadLimits;
+
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -35,8 +37,14 @@ public final class ReplayCompressor {
      * Decompress GZIP bytes back to a JSON string.
      */
     public static String decompress(byte[] bytes) throws IOException {
+        return decompress(bytes, BinaryReplayReadLimits.MAX_DECODED_TIMELINE_BYTES);
+    }
+
+    static String decompress(byte[] bytes, int maximumDecodedBytes) throws IOException {
         try (GZIPInputStream gzip = new GZIPInputStream(new ByteArrayInputStream(bytes))) {
-            return new String(gzip.readAllBytes(), StandardCharsets.UTF_8);
+            byte[] decoded = BinaryReplayReadLimits.readAllBytes(
+                    gzip, maximumDecodedBytes, "Decoded legacy GZIP replay timeline");
+            return new String(decoded, StandardCharsets.UTF_8);
         }
     }
 

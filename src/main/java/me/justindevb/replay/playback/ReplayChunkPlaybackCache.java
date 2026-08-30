@@ -113,7 +113,7 @@ public final class ReplayChunkPlaybackCache {
             });
             for (BinaryChunkRegionEntry entry : decodedRegion.entries()) {
                 if (entry.localChunkX() == coordinate.localChunkX() && entry.localChunkZ() == coordinate.localChunkZ()) {
-                    byte[] payload = entry.compression().decompress(entry.compressedPayload());
+                    byte[] payload = entry.compression().decompress(entry.compressedPayload(), entry.uncompressedLength());
                     return Optional.of(switch (chunkData.metadata().payloadFormat()) {
                         case BRCS -> new ReplayChunkSnapshot.LegacyBlockStateSnapshot(legacyPayloadCodec.decode(payload));
                         case BRCP -> new ReplayChunkSnapshot.PacketFriendlySnapshot(packetFriendlyPayloadCodec.decode(payload));

@@ -23,9 +23,13 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.zip.CRC32C;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
@@ -36,6 +40,9 @@ import java.util.zip.ZipInputStream;
 public final class BinaryReplayStorageCodec implements ReplayStorageCodec {
 
     private static final Comparator<String> CHUNK_ENTRY_ORDER = Comparator.naturalOrder();
+    private static final byte[] ZIP_LOCAL_FILE_HEADER = new byte[] {'P', 'K', 3, 4};
+    private static final Pattern CHUNK_ENTRY_NAME = Pattern.compile(
+            "chunks/((?:[A-Za-z0-9._-]|%[0-9A-F]{2})+)/r\\.(-?\\d+)\\.(-?\\d+)\\.brregion");
 
     private final Gson gson;
     private final BinaryReplayArchiveFinalizer finalizer;
@@ -65,12 +72,9 @@ public final class BinaryReplayStorageCodec implements ReplayStorageCodec {
 
     @Override
     public boolean canDecode(String replayName, byte[] storedBytes) {
-        try {
-            readArchiveEntries(storedBytes);
-            return true;
-        } catch (IOException | RuntimeException ex) {
-            return false;
-        }
+        return storedBytes != null
+                && storedBytes.length <= BinaryReplayReadLimits.MAX_STORED_ARCHIVE_BYTES
+                && startsWith(storedBytes, ZIP_LOCAL_FILE_HEADER);
     }
 
     @Override
@@ -224,29 +228,100 @@ public final class BinaryReplayStorageCodec implements ReplayStorageCodec {
     }
 
     private ArchiveEntries readArchiveEntries(byte[] storedBytes) throws IOException {
+        Objects.requireNonNull(storedBytes, "storedBytes");
+        if (storedBytes.length > BinaryReplayReadLimits.MAX_STORED_ARCHIVE_BYTES) {
+            throw new IOException("Binary replay archive exceeds the permitted stored size");
+        }
         byte[] manifestBytes = null;
         byte[] replayBytes = null;
         Map<String, byte[]> chunkEntries = new HashMap<>();
+        Set<String> entryNames = new HashSet<>();
+        int entryCount = 0;
+        long retainedBytes = 0;
 
         try (ZipInputStream zip = new ZipInputStream(new ByteArrayInputStream(storedBytes))) {
             ZipEntry entry;
             while ((entry = zip.getNextEntry()) != null) {
-                byte[] bytes = zip.readAllBytes();
-                if (BinaryReplayFormat.MANIFEST_ENTRY_NAME.equals(entry.getName())) {
+                if (++entryCount > BinaryReplayReadLimits.MAX_ZIP_ENTRY_COUNT) {
+                    throw new IOException("Binary replay archive contains too many ZIP entries");
+                }
+                String entryName = entry.getName();
+                if (entryName.getBytes(BinaryReplayFormat.STRING_CHARSET).length
+                        > BinaryReplayReadLimits.MAX_ZIP_ENTRY_NAME_BYTES) {
+                    throw new IOException("Binary replay ZIP entry name exceeds the permitted size");
+                }
+                if (!entryNames.add(entryName)) {
+                    throw new IOException("Binary replay archive contains duplicate entry: " + entryName);
+                }
+                if (entry.isDirectory() || !isKnownArchiveEntryName(entryName)) {
+                    throw new IOException("Binary replay archive contains an invalid or unknown entry: " + entryName);
+                }
+                if (entry.getMethod() != ZipEntry.STORED) {
+                    throw new IOException("Binary replay archive entries must use the STORED ZIP method");
+                }
+
+                int entryLimit = entryLimit(entryName);
+                long declaredSize = entry.getSize();
+                long declaredCompressedSize = entry.getCompressedSize();
+                if (declaredSize < 0 || declaredCompressedSize < 0
+                        || declaredSize != declaredCompressedSize
+                        || declaredSize > entryLimit) {
+                    throw new IOException("Binary replay ZIP entry has an invalid declared size: " + entryName);
+                }
+                retainedBytes += declaredSize;
+                if (retainedBytes > BinaryReplayReadLimits.MAX_TOTAL_RETAINED_ZIP_ENTRY_BYTES) {
+                    throw new IOException("Binary replay archive retained entries exceed the aggregate limit");
+                }
+
+                byte[] bytes = BinaryReplayReadLimits.readAllBytes(zip, entryLimit, "Binary replay ZIP entry " + entryName);
+                if (bytes.length != declaredSize) {
+                    throw new IOException("Binary replay ZIP entry size does not match its declaration: " + entryName);
+                }
+                if (BinaryReplayFormat.MANIFEST_ENTRY_NAME.equals(entryName)) {
                     manifestBytes = bytes;
-                } else if (BinaryReplayFormat.REPLAY_ENTRY_NAME.equals(entry.getName())) {
+                } else if (BinaryReplayFormat.REPLAY_ENTRY_NAME.equals(entryName)) {
                     replayBytes = bytes;
-                } else if (entry.getName().startsWith(BinaryReplayFormat.RESERVED_CHUNKS_PREFIX)) {
-                    chunkEntries.put(entry.getName(), bytes);
+                } else {
+                    chunkEntries.put(entryName, bytes);
                 }
                 zip.closeEntry();
             }
+        } catch (IllegalArgumentException ex) {
+            throw new IOException("Binary replay archive contains malformed ZIP metadata", ex);
         }
 
         if (manifestBytes == null || replayBytes == null) {
             throw new IOException("Binary replay archive is missing required entries");
         }
         return new ArchiveEntries(manifestBytes, replayBytes, Map.copyOf(chunkEntries));
+    }
+
+    private static boolean isKnownArchiveEntryName(String entryName) {
+        if (BinaryReplayFormat.MANIFEST_ENTRY_NAME.equals(entryName)
+                || BinaryReplayFormat.REPLAY_ENTRY_NAME.equals(entryName)) {
+            return true;
+        }
+        Matcher matcher = CHUNK_ENTRY_NAME.matcher(entryName);
+        if (!matcher.matches()) {
+            return false;
+        }
+        try {
+            Integer.parseInt(matcher.group(2));
+            Integer.parseInt(matcher.group(3));
+            return true;
+        } catch (NumberFormatException ex) {
+            return false;
+        }
+    }
+
+    private static int entryLimit(String entryName) {
+        if (BinaryReplayFormat.MANIFEST_ENTRY_NAME.equals(entryName)) {
+            return BinaryReplayReadLimits.MAX_MANIFEST_BYTES;
+        }
+        if (BinaryReplayFormat.REPLAY_ENTRY_NAME.equals(entryName)) {
+            return BinaryReplayReadLimits.MAX_COMPRESSED_REPLAY_BYTES;
+        }
+        return BinaryReplayReadLimits.MAX_CHUNK_REGION_BYTES;
     }
 
     private ReplayChunkData loadChunkData(BinaryReplayManifest manifest, Map<String, byte[]> chunkEntries) {
@@ -303,7 +378,13 @@ public final class BinaryReplayStorageCodec implements ReplayStorageCodec {
 
     private BinaryReplayManifest parseManifest(byte[] manifestBytes) throws IOException {
         try {
-            return gson.fromJson(new String(manifestBytes, BinaryReplayFormat.STRING_CHARSET), BinaryReplayManifest.class);
+            BinaryReplayManifest manifest = gson.fromJson(
+                    new String(manifestBytes, BinaryReplayFormat.STRING_CHARSET),
+                    BinaryReplayManifest.class);
+            if (manifest == null) {
+                throw new IOException("Binary replay manifest is empty");
+            }
+            return manifest;
         } catch (RuntimeException ex) {
             throw new IOException("Failed to parse binary replay manifest", ex);
         }
@@ -361,6 +442,9 @@ public final class BinaryReplayStorageCodec implements ReplayStorageCodec {
         if (indexSection != null && !scanned.stringTable().equals(stringTable)) {
             throw new IOException("Binary replay string table does not match finalized index section");
         }
+        if (indexSection != null) {
+            validateFinalizedTickIndex(tickIndex, scanned.events());
+        }
 
         return new ParsedPayload(scanned.events(), stringTable, tickIndex, indexSection != null);
     }
@@ -388,25 +472,49 @@ public final class BinaryReplayStorageCodec implements ReplayStorageCodec {
             return null;
         }
 
-        byte[] indexSectionBytes = Arrays.copyOfRange(payload, indexSectionOffset, footerOffset);
-        BinaryReplayAppendLogCodec.Cursor cursor = new BinaryReplayAppendLogCodec.Cursor(indexSectionBytes);
-        cursor.readBytes(BinaryReplayFormat.INDEX_SECTION_MAGIC.length);
-
         try {
-            int stringCount = cursor.readVarInt();
+            int cursorOffset = indexSectionOffset + BinaryReplayFormat.INDEX_SECTION_MAGIC.length;
+            VarIntRead stringCountRead = readVarInt(payload, cursorOffset, footerOffset);
+            int stringCount = stringCountRead.value();
+            cursorOffset = stringCountRead.nextOffset();
+            validateStringTableCount(stringCount);
+            if (stringCount > footerOffset - cursorOffset) {
+                throw new IOException("Invalid binary replay string-table count");
+            }
             List<String> stringTable = new ArrayList<>(stringCount);
             for (int index = 0; index < stringCount; index++) {
-                stringTable.add(cursor.readLengthPrefixedString().value());
+                VarIntRead stringLengthRead = readVarInt(payload, cursorOffset, footerOffset);
+                int stringLength = stringLengthRead.value();
+                long stringEnd = (long) stringLengthRead.nextOffset() + stringLength;
+                if (stringLength < 0 || stringLength > BinaryReplayReadLimits.MAX_STRING_BYTES
+                        || stringEnd > footerOffset) {
+                    throw new IOException("Invalid or oversized string in binary replay index");
+                }
+                stringTable.add(new String(
+                        payload,
+                        stringLengthRead.nextOffset(),
+                        stringLength,
+                        BinaryReplayFormat.STRING_CHARSET));
+                cursorOffset = (int) stringEnd;
             }
 
-            int tickIndexCount = cursor.readVarInt();
+            VarIntRead tickCountRead = readVarInt(payload, cursorOffset, footerOffset);
+            int tickIndexCount = tickCountRead.value();
+            cursorOffset = tickCountRead.nextOffset();
+            validateTickIndexCount(tickIndexCount);
+            if (tickIndexCount > (footerOffset - cursorOffset) / BinaryReplayFormat.TICK_INDEX_ENTRY_BYTES
+                    || (long) cursorOffset + (long) tickIndexCount * BinaryReplayFormat.TICK_INDEX_ENTRY_BYTES != footerOffset) {
+                throw new IOException("Invalid binary replay tick-index count");
+            }
             List<BinaryTickIndexEntry> tickIndex = new ArrayList<>(tickIndexCount);
             for (int index = 0; index < tickIndexCount; index++) {
-                tickIndex.add(new BinaryTickIndexEntry(cursor.readInt(), cursor.readLong()));
+                ByteBuffer row = ByteBuffer.wrap(payload, cursorOffset, BinaryReplayFormat.TICK_INDEX_ENTRY_BYTES)
+                        .order(BinaryReplayFormat.PRIMITIVE_BYTE_ORDER);
+                tickIndex.add(new BinaryTickIndexEntry(row.getInt(), row.getLong()));
+                cursorOffset += BinaryReplayFormat.TICK_INDEX_ENTRY_BYTES;
             }
-            cursor.ensureFullyRead();
             return new IndexSection(indexSectionOffset, stringTable, tickIndex);
-        } catch (IllegalArgumentException ex) {
+        } catch (IllegalArgumentException | IndexOutOfBoundsException ex) {
             throw new IOException("Failed to parse binary replay index section", ex);
         }
     }
@@ -419,10 +527,11 @@ public final class BinaryReplayStorageCodec implements ReplayStorageCodec {
         while (offset < endOffset) {
             VarIntRead recordLengthRead = readVarInt(payload, offset, endOffset);
             int recordContentOffset = recordLengthRead.nextOffset();
-            int recordContentEnd = recordContentOffset + recordLengthRead.value();
-            if (recordLengthRead.value() < 0 || recordContentEnd > endOffset) {
+            long recordContentEndLong = (long) recordContentOffset + recordLengthRead.value();
+            if (recordLengthRead.value() < 0 || recordContentEndLong > endOffset) {
                 throw new IOException("Malformed finalized replay record length");
             }
+            int recordContentEnd = (int) recordContentEndLong;
 
             VarIntRead recordTypeRead = readVarInt(payload, recordContentOffset, recordContentEnd);
             BinaryRecordType recordType = BinaryRecordType.fromTag(recordTypeRead.value())
@@ -430,19 +539,22 @@ public final class BinaryReplayStorageCodec implements ReplayStorageCodec {
 
             int eventPayloadOffset = recordTypeRead.nextOffset();
             int eventPayloadLength = recordContentEnd - eventPayloadOffset;
-            byte[] eventPayload = Arrays.copyOfRange(payload, eventPayloadOffset, recordContentEnd);
 
             if (recordType == BinaryRecordType.DEFINE_STRING) {
+                byte[] eventPayload = Arrays.copyOfRange(payload, eventPayloadOffset, recordContentEnd);
+                validateDefinedStringLength(eventPayload);
                 BinaryReplayAppendLogCodec.DefinedString definedString = BinaryReplayAppendLogCodec.decodeDefineString(eventPayload);
                 if (definedString.index() != stringTable.size()) {
                     throw new IOException("Invalid string-table index in finalized replay: " + definedString.index());
                 }
+                validateStringTableCount(stringTable.size() + 1);
                 stringTable.add(definedString.value());
             } else {
                 if (eventPayloadLength < Integer.BYTES) {
                     throw new IOException("Finalized replay event payload is too short to contain a tick");
                 }
                 int tick = readLittleEndianInt(payload, eventPayloadOffset);
+                validateTimelineEventCount(events.size() + 1);
                 events.add(new EventSlice(recordType, offset, eventPayloadOffset, eventPayloadLength, tick));
             }
 
@@ -452,6 +564,81 @@ public final class BinaryReplayStorageCodec implements ReplayStorageCodec {
         return new ScannedEventStream(events, stringTable);
     }
 
+    static void validateStringTableCount(int count) throws IOException {
+        validateCount(count, BinaryReplayReadLimits.MAX_STRING_TABLE_ENTRIES, "string-table");
+    }
+
+    static void validateTickIndexCount(int count) throws IOException {
+        validateCount(count, BinaryReplayReadLimits.MAX_TICK_INDEX_ENTRIES, "tick-index");
+    }
+
+    static void validateTimelineEventCount(int count) throws IOException {
+        validateCount(count, BinaryReplayReadLimits.MAX_TIMELINE_EVENT_COUNT, "timeline event");
+    }
+
+    private static void validateCount(int count, int maximum, String description) throws IOException {
+        if (count < 0 || count > maximum) {
+            throw new IOException("Invalid or excessive binary replay " + description + " count: " + count);
+        }
+    }
+
+    private static void validateFinalizedTickIndex(
+            List<BinaryTickIndexEntry> tickIndex,
+            List<EventSlice> events
+    ) throws IOException {
+        validateTickIndexCount(tickIndex.size());
+        if (events.isEmpty()) {
+            if (!tickIndex.isEmpty()) {
+                throw new IOException("Empty binary replay has a nonempty tick index");
+            }
+            return;
+        }
+        if (tickIndex.isEmpty()) {
+            if (events.getFirst().tick() <= 0) {
+                throw new IOException("Binary replay is missing its initial tick-index checkpoint");
+            }
+            return;
+        }
+        if (tickIndex.getFirst().tick() != 0 || tickIndex.size() > events.size()) {
+            throw new IOException("Binary replay tick index has invalid nonempty semantics");
+        }
+
+        Map<Long, Integer> eventIndexesByOffset = new HashMap<>();
+        for (int eventIndex = 0; eventIndex < events.size(); eventIndex++) {
+            eventIndexesByOffset.put(events.get(eventIndex).recordOffset(), eventIndex);
+        }
+
+        int previousTick = -1;
+        int previousEventIndex = -1;
+        for (BinaryTickIndexEntry checkpoint : tickIndex) {
+            if (checkpoint.tick() <= previousTick) {
+                throw new IOException("Binary replay tick-index checkpoints are not strictly increasing");
+            }
+            Integer eventIndex = eventIndexesByOffset.get(checkpoint.byteOffset());
+            if (eventIndex == null || eventIndex <= previousEventIndex) {
+                throw new IOException("Binary replay tick-index offset does not identify a forward event record");
+            }
+            EventSlice referencedEvent = events.get(eventIndex);
+            if (referencedEvent.tick() > checkpoint.tick()) {
+                throw new IOException("Binary replay tick index seeks past its checkpoint");
+            }
+            if (eventIndex + 1 < events.size() && checkpoint.tick() > events.get(eventIndex + 1).tick()) {
+                throw new IOException("Binary replay tick index checkpoint is not useful for seeking");
+            }
+            previousTick = checkpoint.tick();
+            previousEventIndex = eventIndex;
+        }
+    }
+
+    private static void validateDefinedStringLength(byte[] eventPayload) throws IOException {
+        VarIntRead index = readVarInt(eventPayload, 0, eventPayload.length);
+        VarIntRead length = readVarInt(eventPayload, index.nextOffset(), eventPayload.length);
+        if (length.value() < 0 || length.value() > BinaryReplayReadLimits.MAX_STRING_BYTES
+                || (long) length.nextOffset() + length.value() != eventPayload.length) {
+            throw new IOException("Invalid or oversized string in finalized replay");
+        }
+    }
+
     private static List<BinaryTickIndexEntry> rebuildTickIndex(List<EventSlice> events) {
         if (events.isEmpty()) {
             return List.of();
@@ -459,16 +646,19 @@ public final class BinaryReplayStorageCodec implements ReplayStorageCodec {
 
         List<BinaryTickIndexEntry> tickIndex = new ArrayList<>();
         long lastEventOffset = -1;
-        int nextCheckpointTick = 0;
+        long nextCheckpointTick = 0;
+        boolean indexStarted = false;
 
         for (EventSlice event : events) {
-            if (lastEventOffset < 0) {
+            if (!indexStarted && event.tick() <= 0) {
                 tickIndex.add(new BinaryTickIndexEntry(0, event.recordOffset()));
                 nextCheckpointTick = BinaryReplayFormat.TICK_INDEX_INTERVAL;
-            } else {
-                while (nextCheckpointTick <= event.tick()) {
-                    tickIndex.add(new BinaryTickIndexEntry(nextCheckpointTick, lastEventOffset));
-                    nextCheckpointTick += BinaryReplayFormat.TICK_INDEX_INTERVAL;
+                indexStarted = true;
+            } else if (indexStarted) {
+                if (nextCheckpointTick <= event.tick()) {
+                    int checkpointTick = event.tick() - event.tick() % BinaryReplayFormat.TICK_INDEX_INTERVAL;
+                    tickIndex.add(new BinaryTickIndexEntry(checkpointTick, lastEventOffset));
+                    nextCheckpointTick = (long) checkpointTick + BinaryReplayFormat.TICK_INDEX_INTERVAL;
                 }
             }
             lastEventOffset = event.recordOffset();
@@ -505,6 +695,10 @@ public final class BinaryReplayStorageCodec implements ReplayStorageCodec {
         CRC32C crc32c = new CRC32C();
         crc32c.update(bytes, 0, bytes.length);
         return "%08x".formatted(crc32c.getValue());
+    }
+
+    private static boolean startsWith(byte[] bytes, byte[] prefix) {
+        return bytes.length >= prefix.length && Arrays.equals(Arrays.copyOf(bytes, prefix.length), prefix);
     }
 
     private static String crc32cHex(List<String> coordinateDigests) {

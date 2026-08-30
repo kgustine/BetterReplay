@@ -4,6 +4,7 @@ import me.justindevb.replay.Replay;
 import me.justindevb.replay.api.ReplayExportQuery;
 import me.justindevb.replay.chunk.CapturedChunkBaseline;
 import me.justindevb.replay.chunk.ChunkCoordinate;
+import me.justindevb.replay.debug.ReplayDumpQuery;
 import me.justindevb.replay.recording.TimelineEvent;
 import me.justindevb.replay.storage.binary.BinaryChunkTempRegionFileWriter;
 import me.justindevb.replay.storage.binary.BinaryReplayStorageCodec;
@@ -18,6 +19,7 @@ import java.io.File;
 import java.io.FileWriter;
 import java.nio.file.Files;
 import java.util.List;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.ExecutionException;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -127,6 +129,20 @@ class FileReplayStorageEdgeCaseTest {
     class Boundaries {
 
         @Test
+        void replayReads_rejectFilesOverTheStoredArchiveLimit() throws Exception {
+            storage = new FileReplayStorage(replay, 8);
+            File oversized = new File(new File(tempDir, "replays"), "oversized.br");
+            Files.write(oversized.toPath(), new byte[9]);
+
+            assertStoredArchiveLimit(() -> storage.loadReplayData("oversized").join());
+            assertStoredArchiveLimit(() -> storage.getReplayFile("oversized").join());
+            assertStoredArchiveLimit(() -> storage.getReplayFile("oversized", new ReplayExportQuery(null, null, null)).join());
+            assertStoredArchiveLimit(() -> storage.getReplayInfo("oversized").join());
+            assertStoredArchiveLimit(() -> storage.getReplayDumpFile("oversized", new ReplayDumpQuery(null, null)).join());
+            assertTrue(storage.listReplaySummaries().join().stream().noneMatch(summary -> summary.name().equals("oversized")));
+        }
+
+        @Test
         void saveAndLoad_emptyTimeline() throws Exception {
             storage.saveReplay("empty-session", List.of()).get();
             List<TimelineEvent> loaded = storage.loadReplay("empty-session").get();
@@ -184,6 +200,16 @@ class FileReplayStorageEdgeCaseTest {
             assertNull(summary.protectedAt());
             assertNull(summary.protectedBy());
         }
+    }
+
+    private static void assertStoredArchiveLimit(org.junit.jupiter.api.function.Executable operation) {
+        CompletionException exception = assertThrows(CompletionException.class, operation);
+        Throwable cause = exception;
+        while (cause.getCause() != null) {
+            cause = cause.getCause();
+        }
+        assertInstanceOf(java.io.IOException.class, cause);
+        assertTrue(cause.getMessage().contains("exceeds the limit of 8 bytes"));
     }
 
     // ── Stable binary save format ─────────────────────────────

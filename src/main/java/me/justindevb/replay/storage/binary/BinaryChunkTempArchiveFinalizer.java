@@ -102,7 +102,17 @@ public final class BinaryChunkTempArchiveFinalizer implements ChunkArchiveFinali
 
         int regionX = Integer.parseInt(matcher.group(1));
         int regionZ = Integer.parseInt(matcher.group(2));
-        byte[] bytes = Files.readAllBytes(tempRegionFile);
+        long fileSize = Files.size(tempRegionFile);
+        if (fileSize > maximumTempRegionBytes()) {
+            throw new IOException("Chunk temp region file exceeds the permitted size: " + tempRegionFile);
+        }
+        byte[] bytes;
+        try (java.io.InputStream input = Files.newInputStream(tempRegionFile)) {
+            bytes = BinaryReplayReadLimits.readAllBytes(
+                    input,
+                    maximumTempRegionBytes(),
+                    "Chunk temp region file");
+        }
         if (bytes.length < BinaryReplayFormat.CHUNK_TEMP_REGION_HEADER_SIZE) {
             throw new IOException("Chunk temp region file is too short: " + tempRegionFile);
         }
@@ -139,11 +149,12 @@ public final class BinaryChunkTempArchiveFinalizer implements ChunkArchiveFinali
         return new FinalizedRegion(entryName, entries, detectedPayloadFormat);
     }
 
+    static int maximumTempRegionBytes() {
+        return BinaryReplayReadLimits.MAX_TEMP_REGION_BYTES;
+    }
+
     private static BinaryChunkPayloadFormat detectPayloadFormat(BinaryChunkTempRegionAppendRecord record) throws IOException {
-        byte[] payload = record.compression().decompress(record.compressedPayload());
-        if (payload.length != record.uncompressedLength()) {
-            throw new IOException("Chunk temp region record uncompressed length mismatch");
-        }
+        byte[] payload = record.compression().decompress(record.compressedPayload(), record.uncompressedLength());
         try {
             return BinaryChunkPayloadFormat.fromPayloadBytes(payload);
         } catch (IllegalArgumentException ex) {

@@ -7,6 +7,7 @@ import org.junit.jupiter.api.Test;
 
 import java.io.File;
 import java.nio.file.Files;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -53,6 +54,30 @@ class JsonReplayStorageCodecTest {
         List<TimelineEvent> decoded = codec.decodeTimeline(legacyJson, "1.4.0");
         assertEquals(1, decoded.size());
         assertInstanceOf(TimelineEvent.PlayerQuit.class, decoded.get(0));
+    }
+
+    @Test
+    void canDecodeSniffsRawJsonAfterAsciiWhitespace() {
+        assertTrue(codec.canDecode("object.json", " \t\r\n{}".getBytes(StandardCharsets.US_ASCII)));
+        assertTrue(codec.canDecode("array.json", "\n[]".getBytes(StandardCharsets.US_ASCII)));
+        assertFalse(codec.canDecode("binary", new byte[] {0, 1, 2, '{'}));
+    }
+
+    @Test
+    void canDecodeBoundsLeadingWhitespaceScan() {
+        byte[] payload = new byte[JsonReplayStorageCodec.MAX_DETECTION_PREFIX_BYTES + 1];
+        java.util.Arrays.fill(payload, (byte) ' ');
+        payload[payload.length - 1] = '{';
+
+        assertFalse(codec.canDecode("pathological.json", payload));
+    }
+
+    @Test
+    void canDecodeBoundsGzipDecompressionToDetectionPrefix() throws Exception {
+        String json = " ".repeat(JsonReplayStorageCodec.MAX_DETECTION_PREFIX_BYTES) + "{}";
+
+        assertFalse(codec.canDecode("pathological.json.gz", ReplayCompressor.compress(json)));
+        assertTrue(codec.canDecode("legacy.json.gz", ReplayCompressor.compress("\n[]")));
     }
 
     @Test

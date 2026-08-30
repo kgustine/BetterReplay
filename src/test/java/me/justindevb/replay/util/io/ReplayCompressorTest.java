@@ -84,4 +84,13 @@ class ReplayCompressorTest {
         assertTrue(compressed.length < original.getBytes(StandardCharsets.UTF_8).length);
         assertEquals(original, ReplayCompressor.decompress(compressed));
     }
+
+    @Test
+    void decompress_rejectsDecodedDataOverLimit() throws IOException {
+        byte[] compressed = ReplayCompressor.compress("123456789");
+
+        IOException exception = assertThrows(IOException.class, () -> ReplayCompressor.decompress(compressed, 8));
+
+        assertTrue(exception.getMessage().contains("exceeds the limit of 8 bytes"));
+    }
 }

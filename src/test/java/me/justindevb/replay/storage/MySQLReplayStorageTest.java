@@ -10,6 +10,7 @@ import me.justindevb.replay.chunk.CapturedChunkBaseline;
 import me.justindevb.replay.chunk.ChunkCoordinate;
 import me.justindevb.replay.debug.ReplayDumpQuery;
 import me.justindevb.replay.recording.TimelineEvent;
+import me.justindevb.replay.storage.binary.BinaryReplayReadLimits;
 import me.justindevb.replay.storage.binary.BinaryReplayStorageCodec;
 import me.justindevb.replay.storage.binary.BinaryChunkTempRegionFileWriter;
 import me.justindevb.replay.util.VersionUtil;
@@ -25,7 +26,9 @@ import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
 
 import javax.sql.DataSource;
+import java.io.ByteArrayInputStream;
 import java.io.File;
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.sql.Connection;
@@ -36,13 +39,16 @@ import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.logging.Logger;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -51,6 +57,8 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -108,7 +116,8 @@ class MySQLReplayStorageTest {
             if (sql.startsWith("INSERT INTO replays")) {
                 return saveStatement;
             }
-            if (sql.startsWith("SELECT data FROM replays WHERE name=?")) {
+            if (sql.startsWith("SELECT data FROM replays WHERE name=?")
+                    || (sql.contains("FROM replays WHERE name=?") && sql.contains(" AS data"))) {
                 return selectStatement;
             }
             if (sql.startsWith("SHOW COLUMNS FROM replays LIKE ?")) {
@@ -167,7 +176,7 @@ class MySQLReplayStorageTest {
         assertTrue(new BinaryReplayStorageCodec().canDecode("binary", storedBytes));
 
         when(selectResultSet.next()).thenReturn(true);
-        when(selectResultSet.getBytes("data")).thenReturn(storedBytes);
+        givenReplayData(storedBytes);
 
         List<TimelineEvent> loaded = storage.loadReplay("binary").get();
 
@@ -203,7 +212,7 @@ class MySQLReplayStorageTest {
         verify(saveStatement).setBytes(org.mockito.ArgumentMatchers.eq(2), dataCaptor.capture());
         storedBytes = dataCaptor.getValue();
         when(selectResultSet.next()).thenReturn(true);
-        when(selectResultSet.getBytes("data")).thenReturn(storedBytes);
+        givenReplayData(storedBytes);
 
         ReplayPlaybackData replayData = storage.loadReplayData("binary-chunks").get();
 
@@ -217,7 +226,7 @@ class MySQLReplayStorageTest {
     void getReplayFileExportsSameBinaryArchiveBytes() throws Exception {
         byte[] archive = new BinaryReplayStorageCodec().finalizeReplay("export", sampleTimeline(), "1.4.0");
         when(selectResultSet.next()).thenReturn(true);
-        when(selectResultSet.getBytes("data")).thenReturn(archive);
+        givenReplayData(archive);
 
         File exported = storage.getReplayFile("export").get();
 
@@ -229,7 +238,7 @@ class MySQLReplayStorageTest {
     void loadReplayKeepsLegacyJsonCompatibility() throws Exception {
         byte[] legacyJson = new JsonReplayStorageCodec().encodeTimeline(sampleTimeline(), VersionUtil.MIN_RECORDING_VERSION);
         when(selectResultSet.next()).thenReturn(true);
-        when(selectResultSet.getBytes("data")).thenReturn(legacyJson);
+        givenReplayData(legacyJson);
 
         List<TimelineEvent> loaded = storage.loadReplay("legacy").get();
 
@@ -241,7 +250,7 @@ class MySQLReplayStorageTest {
     void filteredExportUsesReplayQuery() throws Exception {
         byte[] archive = new BinaryReplayStorageCodec().finalizeReplay("export-filtered", sampleTimeline(), "1.4.0");
         when(selectResultSet.next()).thenReturn(true);
-        when(selectResultSet.getBytes("data")).thenReturn(archive);
+        givenReplayData(archive);
 
         File exported = storage.getReplayFile("export-filtered", new ReplayExportQuery(null, 5, 10)).get();
         assertEquals(new File(tempDir, "exports").getCanonicalFile(), exported.getParentFile().getCanonicalFile());
@@ -266,7 +275,7 @@ class MySQLReplayStorageTest {
                     VersionUtil.MIN_RECORDING_VERSION);
         }
         when(selectResultSet.next()).thenReturn(true);
-        when(selectResultSet.getBytes("data")).thenReturn(archive);
+        givenReplayData(archive);
 
         File exported = storage.getReplayFile("chunk-export", new ReplayExportQuery("Steve", null, null)).get();
         assertNotNull(exported);
@@ -281,7 +290,7 @@ class MySQLReplayStorageTest {
     void getReplayInfo_returnsTimestampCountsAndSizes() throws Exception {
         byte[] archive = new BinaryReplayStorageCodec().finalizeReplay("info", sampleTimeline(), "1.4.0", 123456789L);
         when(selectResultSet.next()).thenReturn(true);
-        when(selectResultSet.getBytes("data")).thenReturn(archive);
+        givenReplayData(archive);
 
         ReplayInspection info = storage.getReplayInfo("info").get();
 
@@ -301,7 +310,7 @@ class MySQLReplayStorageTest {
     void getReplayDumpFile_propagatesDecodeFailures() throws Exception {
         byte[] archive = "{\"createdBy\":\"9.0.0\",\"minVersion\":\"9.0.0\",\"timeline\":[]}".getBytes(StandardCharsets.UTF_8);
         when(selectResultSet.next()).thenReturn(true);
-        when(selectResultSet.getBytes("data")).thenReturn(archive);
+        givenReplayData(archive);
 
         RuntimeException exception = assertThrows(RuntimeException.class,
                 () -> storage.getReplayDumpFile("dump-versioned", new ReplayDumpQuery(null, null)).join());
@@ -313,7 +322,7 @@ class MySQLReplayStorageTest {
     void dumpUsesTickRangeAndWritesToPluginDumpFolder() throws Exception {
         byte[] archive = new BinaryReplayStorageCodec().finalizeReplay("dump-filtered", sampleTimeline(), "1.4.0");
         when(selectResultSet.next()).thenReturn(true);
-        when(selectResultSet.getBytes("data")).thenReturn(archive);
+        givenReplayData(archive);
 
         File dumped = storage.getReplayDumpFile("dump-filtered", new ReplayDumpQuery(5, 10)).get();
         String dumpText = Files.readString(dumped.toPath());
@@ -322,6 +331,75 @@ class MySQLReplayStorageTest {
         assertTrue(dumpText.contains("[tick=5]"));
         assertTrue(dumpText.contains("[tick=10]"));
         assertFalse(dumpText.contains("[tick=0]"));
+    }
+
+    @Test
+    void loadReplayData_readsThroughBoundedBinaryStream() throws Exception {
+        byte[] archive = new BinaryReplayStorageCodec().finalizeReplay("streamed", sampleTimeline(), "1.4.0");
+        when(selectResultSet.next()).thenReturn(true);
+        givenReplayData(archive);
+
+        assertNotNull(storage.loadReplayData("streamed").get());
+
+        verify(selectResultSet).getBinaryStream("data");
+        verify(selectResultSet, never()).getBytes("data");
+    }
+
+    @Test
+    void replayDataQueries_boundDataInSqlForEveryReadPath() throws Exception {
+        when(selectResultSet.next()).thenReturn(false);
+
+        assertNull(storage.loadReplayData("load").get());
+        assertNull(storage.getReplayFile("file").get());
+        assertNull(storage.getReplayFile("export", new ReplayExportQuery(null, null, null)).get());
+        assertNull(storage.getReplayInfo("info").get());
+        assertNull(storage.getReplayDumpFile("dump", new ReplayDumpQuery(null, null)).get());
+
+        ArgumentCaptor<String> sqlCaptor = ArgumentCaptor.forClass(String.class);
+        verify(connection, atLeastOnce()).prepareStatement(sqlCaptor.capture());
+        List<String> replayDataQueries = sqlCaptor.getAllValues().stream()
+                .map(sql -> sql.trim().replaceAll("\\s+", " "))
+                .filter(sql -> sql.contains("FROM replays WHERE name=?") && sql.contains(" AS data"))
+                .toList();
+        assertEquals(5, replayDataQueries.size());
+        assertTrue(replayDataQueries.stream().allMatch(sql -> sql.equals(
+                "SELECT OCTET_LENGTH(data) AS data_size, "
+                        + "CASE WHEN OCTET_LENGTH(data) <= ? THEN data ELSE NULL END AS data "
+                        + "FROM replays WHERE name=?")));
+        verify(selectStatement, times(5)).setLong(1, BinaryReplayReadLimits.MAX_STORED_ARCHIVE_BYTES);
+        verify(selectStatement).setString(2, "load");
+        verify(selectStatement).setString(2, "file");
+        verify(selectStatement).setString(2, "export");
+        verify(selectStatement).setString(2, "info");
+        verify(selectStatement).setString(2, "dump");
+    }
+
+    @Test
+    void loadReplayData_rejectsOversizedRowBeforeReadingNullableData() throws Exception {
+        when(selectResultSet.next()).thenReturn(true);
+        when(selectResultSet.getLong("data_size"))
+                .thenReturn((long) BinaryReplayReadLimits.MAX_STORED_ARCHIVE_BYTES + 1);
+
+        CompletionException exception = assertThrows(CompletionException.class,
+                () -> storage.loadReplayData("oversized").join());
+
+        assertInstanceOf(IOException.class, rootCause(exception));
+        assertTrue(rootCause(exception).getMessage().contains("exceeds the limit"));
+        verify(selectResultSet, never()).getBlob("data");
+        verify(selectResultSet, never()).getBinaryStream("data");
+    }
+
+    @Test
+    void loadReplayData_nullDataFailsClearly() throws Exception {
+        when(selectResultSet.next()).thenReturn(true);
+        when(selectResultSet.getBlob("data")).thenReturn(null);
+        when(selectResultSet.getBinaryStream("data")).thenReturn(null);
+
+        CompletionException exception = assertThrows(CompletionException.class,
+                () -> storage.loadReplayData("null-data").join());
+
+        assertInstanceOf(IOException.class, rootCause(exception));
+        assertEquals("Replay data is NULL", rootCause(exception).getMessage());
     }
 
     @Test
@@ -396,5 +474,18 @@ class MySQLReplayStorageTest {
                 new TimelineEvent.BlockBreak(5, "uuid-1", "world", 10, 64, 20, "minecraft:stone"),
                 new TimelineEvent.PlayerQuit(10, "uuid-1")
         );
+    }
+
+    private void givenReplayData(byte[] data) throws Exception {
+        when(selectResultSet.getLong("data_size")).thenReturn((long) data.length);
+        when(selectResultSet.getBlob("data")).thenReturn(null);
+        when(selectResultSet.getBinaryStream("data")).thenAnswer(invocation -> new ByteArrayInputStream(data));
+    }
+
+    private static Throwable rootCause(Throwable throwable) {
+        while (throwable.getCause() != null) {
+            throwable = throwable.getCause();
+        }
+        return throwable;
     }
 }

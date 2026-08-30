@@ -184,6 +184,37 @@ class BinaryReplayStorageCodecTest {
     }
 
     @Test
+    void missingIndexWithLargeTickGapBuildsSparseCheckpoints() throws Exception {
+        List<TimelineEvent> timeline = List.of(
+                new TimelineEvent.PlayerQuit(0, "uuid-0"),
+                new TimelineEvent.PlayerQuit(Integer.MAX_VALUE, "uuid-max"));
+        byte[] archive = codec.finalizeReplay("sparse-fallback", timeline, "1.5.0", RECORDING_STARTED_AT);
+        Map<String, byte[]> entries = readArchiveEntries(archive);
+        byte[] payload = decompress(entries.get(BinaryReplayFormat.REPLAY_ENTRY_NAME));
+        long indexOffset = ByteBuffer.wrap(payload, payload.length - BinaryReplayFormat.INDEX_SECTION_FOOTER_BYTES,
+                        BinaryReplayFormat.INDEX_SECTION_FOOTER_BYTES)
+                .order(BinaryReplayFormat.PRIMITIVE_BYTE_ORDER)
+                .getLong();
+        entries.put(BinaryReplayFormat.REPLAY_ENTRY_NAME, compress(Arrays.copyOf(payload, Math.toIntExact(indexOffset))));
+        updateManifestChecksum(entries);
+
+        BinaryReplayStorageCodec.ParsedBinaryReplay replay = codec.openReplay(writeArchive(entries), VersionUtil.MIN_RECORDING_VERSION);
+
+        assertEquals(2, replay.tickIndex().size());
+        assertEquals(1, replay.timeline().findEventIndexAtOrAfterTick(Integer.MAX_VALUE));
+    }
+
+    @Test
+    void parserCountGuardsRejectLogicalOverflowWithoutAllocating() {
+        assertThrows(IOException.class, () -> BinaryReplayStorageCodec.validateStringTableCount(
+                BinaryReplayReadLimits.MAX_STRING_TABLE_ENTRIES + 1));
+        assertThrows(IOException.class, () -> BinaryReplayStorageCodec.validateTickIndexCount(
+                BinaryReplayReadLimits.MAX_TICK_INDEX_ENTRIES + 1));
+        assertThrows(IOException.class, () -> BinaryReplayStorageCodec.validateTimelineEventCount(
+                BinaryReplayReadLimits.MAX_TIMELINE_EVENT_COUNT + 1));
+    }
+
+    @Test
     void failsOnUnknownRecordTags() throws Exception {
         byte[] archive = codec.finalizeReplay("unknown-tag", sampleTimeline(), "1.4.0", RECORDING_STARTED_AT);
         Map<String, byte[]> entries = readArchiveEntries(archive);

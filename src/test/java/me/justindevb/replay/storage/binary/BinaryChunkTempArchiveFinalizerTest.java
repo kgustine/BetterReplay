@@ -25,6 +25,14 @@ class BinaryChunkTempArchiveFinalizerTest {
     Path tempDir;
 
     @Test
+    void tempRegionWholeFilePolicyIsDistinctFromFinalizedRegionPolicy() {
+        assertEquals(BinaryReplayReadLimits.MAX_TEMP_REGION_BYTES,
+                BinaryChunkTempArchiveFinalizer.maximumTempRegionBytes());
+        assertTrue(BinaryChunkTempArchiveFinalizer.maximumTempRegionBytes()
+                > BinaryReplayReadLimits.MAX_CHUNK_REGION_BYTES);
+    }
+
+    @Test
     void finalizeArtifacts_convertsTempRegionFilesIntoArchiveEntries() throws Exception {
         try (BinaryChunkTempRegionFileWriter writer = new BinaryChunkTempRegionFileWriter(tempDir)) {
             writer.append(new CapturedChunkBaseline(new ChunkCoordinate("world", 0, 0), BRCS_PAYLOAD));

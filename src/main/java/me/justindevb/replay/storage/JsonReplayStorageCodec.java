@@ -16,12 +16,15 @@ import me.justindevb.replay.util.io.SerializedItemData;
 import java.io.File;
 import java.io.FileWriter;
 import java.io.IOException;
+import java.io.ByteArrayInputStream;
+import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.zip.GZIPInputStream;
 
 /**
  * Current JSON replay codec extracted behind the storage abstraction seam.
@@ -30,6 +33,7 @@ public final class JsonReplayStorageCodec implements ReplayStorageCodec {
 
     public static final String EXT_COMPRESSED = ".json.gz";
     public static final String EXT_UNCOMPRESSED = ".json";
+    static final int MAX_DETECTION_PREFIX_BYTES = 8192;
 
     private final Gson gson;
 
@@ -51,13 +55,47 @@ public final class JsonReplayStorageCodec implements ReplayStorageCodec {
 
     @Override
     public boolean canDecode(String replayName, byte[] storedBytes) {
+        if (storedBytes == null) {
+            return false;
+        }
         try {
-            String json = ReplayCompressor.decompressIfNeeded(storedBytes);
-            String trimmed = json.stripLeading();
-            return trimmed.startsWith("{") || trimmed.startsWith("[");
+            if (!ReplayCompressor.isGzipCompressed(storedBytes)) {
+                return startsWithJsonToken(storedBytes);
+            }
+            try (GZIPInputStream gzip = new GZIPInputStream(new ByteArrayInputStream(storedBytes))) {
+                return startsWithJsonToken(gzip);
+            }
         } catch (IOException | RuntimeException ex) {
             return false;
         }
+    }
+
+    private static boolean startsWithJsonToken(byte[] bytes) {
+        int limit = Math.min(bytes.length, MAX_DETECTION_PREFIX_BYTES);
+        for (int index = 0; index < limit; index++) {
+            int current = bytes[index] & 0xFF;
+            if (!isJsonWhitespace(current)) {
+                return current == '{' || current == '[';
+            }
+        }
+        return false;
+    }
+
+    private static boolean startsWithJsonToken(InputStream input) throws IOException {
+        for (int index = 0; index < MAX_DETECTION_PREFIX_BYTES; index++) {
+            int current = input.read();
+            if (current < 0) {
+                return false;
+            }
+            if (!isJsonWhitespace(current)) {
+                return current == '{' || current == '[';
+            }
+        }
+        return false;
+    }
+
+    private static boolean isJsonWhitespace(int value) {
+        return value == ' ' || value == '\t' || value == '\r' || value == '\n';
     }
 
     @Override

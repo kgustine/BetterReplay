@@ -100,6 +100,18 @@ class BinaryReplayArchiveFinalizerTest {
     }
 
     @Test
+    void sparseTickIndexDoesNotExpandEveryMissingInterval() throws Exception {
+        List<TimelineEvent> timeline = List.of(
+                new TimelineEvent.PlayerQuit(0, "uuid-0"),
+                new TimelineEvent.PlayerQuit(Integer.MAX_VALUE, "uuid-max"));
+
+        byte[] archive = finalizer.finalizeReplay("sparse", timeline, "1.5.0", RECORDING_STARTED_AT);
+        ParsedPayload parsedPayload = parsePayload(decompress(readArchiveEntries(archive).get(BinaryReplayFormat.REPLAY_ENTRY_NAME)));
+
+        assertEquals(List.of(0, 2_147_483_600), parsedPayload.tickIndex().stream().map(BinaryTickIndexEntry::tick).toList());
+    }
+
+    @Test
     void finalizesRecoveredPrefixAfterTailLoss() throws Exception {
         Path path = tempDir.resolve("recovered.appendlog");
         BinaryReplayAppendLogReader reader = new BinaryReplayAppendLogReader();

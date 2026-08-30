@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.1] - 2026-08-30
+
+### Security
+- 2026-08-29: Replay loading now bounds file, MySQL, ZIP, LZ4, Zstd, GZIP, timeline-index, and chunk-payload allocations; validates declared sizes and codec metadata; and rejects malformed archive structures before they can exhaust server memory
+
 ## [1.5.0] - 2026-08-26
 
 ### Added
@@ -171,7 +176,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Item drop recording from player inventory
 - Initial commit with base plugin structure
 
-[Unreleased]: https://github.com/JustinDevB/BetterReplay/compare/v1.5.0...HEAD
+[Unreleased]: https://github.com/JustinDevB/BetterReplay/compare/v1.5.1...HEAD
+[1.5.1]: https://github.com/JustinDevB/BetterReplay/compare/v1.5.0...v1.5.1
 [1.5.0]: https://github.com/JustinDevB/BetterReplay/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/JustinDevB/BetterReplay/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/JustinDevB/BetterReplay/compare/v1.2.0...v1.3.0
