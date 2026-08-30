@@ -79,14 +79,22 @@ public final class BinaryReplayAppendLogWriter implements ReplayAppendLogWriter 
     }
 
     private void writeRecord(BinaryRecordType recordType, byte[] payload) throws IOException {
+        byte[] encodedType = BinaryEncoding.encodeVarInt(recordType.tag());
+        validateRecordLength((long) encodedType.length + payload.length);
         ByteArrayOutputStream recordBytes = new ByteArrayOutputStream();
-        recordBytes.writeBytes(BinaryEncoding.encodeVarInt(recordType.tag()));
+        recordBytes.writeBytes(encodedType);
         recordBytes.writeBytes(payload);
 
         byte[] recordContent = recordBytes.toByteArray();
         outputStream.write(BinaryEncoding.encodeVarInt(recordContent.length));
         outputStream.write(recordContent);
         outputStream.write(intToBytes(calculateCrc32c(recordContent)));
+    }
+
+    static void validateRecordLength(long recordLength) throws IOException {
+        if (recordLength < 0 || recordLength > BinaryReplayReadLimits.MAX_APPEND_LOG_RECORD_BYTES) {
+            throw new IOException("Append-log record exceeds the permitted size");
+        }
     }
 
     private static int calculateCrc32c(byte[] recordContent) {

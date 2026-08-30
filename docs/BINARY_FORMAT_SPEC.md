@@ -95,6 +95,32 @@ Readers must use `payloadCompression` when it is present. If the field is absent
 
 These prefixes are reserved in v1. `chunks/` is now defined for chunk-enabled archives but is still optional.
 
+### Reader safety limits
+
+BetterReplay applies fixed allocation limits while reading persisted replay data. These limits are reader safety policy rather than additional encoded fields, so they do not change the archive format or the Zstd/LZ4 compatibility contract.
+
+| Resource | Maximum |
+|----------|---------|
+| Stored replay file or MySQL value | 128 MiB |
+| ZIP entries | 65,536 |
+| ZIP entry name | 1 KiB UTF-8 |
+| `manifest.json` | 1 MiB |
+| Compressed `replay.bin` | 128 MiB |
+| Decoded timeline payload | 256 MiB |
+| One `.brregion` entry | 64 MiB |
+| Total retained ZIP entry data | 128 MiB |
+| Decoded chunk payload | 8 MiB |
+| One append-log event record | 128 MiB |
+| One temporary chunk-region append log | 128 MiB |
+| String value | 1 MiB UTF-8 |
+| Serialized item or block-entity NBT value | 2 MiB |
+| Chunk index rows per region | 1,024 |
+| Timeline events | 2,000,000 |
+| Timeline string-table entries | 1,000,000 |
+| Timeline tick-index entries | 2,000,000 |
+
+Readers reject non-STORED entries, unknown or non-canonical entry names, duplicate names, mismatched declared sizes, unsupported codec metadata, and codec/frame-magic mismatches. LZ4 and Zstd output is read through a bounded stream; chunk output must exactly match its positive declared uncompressed length. Encoded collection counts are also constrained by remaining input bytes and format geometry before allocation.
+
 ## Chunk Archive Entry Naming
 
 Chunk region entries use this canonical naming pattern:

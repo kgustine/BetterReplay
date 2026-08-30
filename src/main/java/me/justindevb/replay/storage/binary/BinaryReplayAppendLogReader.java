@@ -3,6 +3,7 @@ package me.justindevb.replay.storage.binary;
 import me.justindevb.replay.recording.TimelineEvent;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.ByteBuffer;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -42,7 +43,17 @@ public final class BinaryReplayAppendLogReader {
                     0);
         }
 
-        byte[] bytes = Files.readAllBytes(path);
+        long fileSize = Files.size(path);
+        if (fileSize > BinaryReplayReadLimits.MAX_DECODED_TIMELINE_BYTES) {
+            throw new IOException("Append-log exceeds the permitted size");
+        }
+        byte[] bytes;
+        try (InputStream input = Files.newInputStream(path)) {
+            bytes = BinaryReplayReadLimits.readAllBytes(
+                    input,
+                    BinaryReplayReadLimits.MAX_DECODED_TIMELINE_BYTES,
+                    "Append-log");
+        }
         if (bytes.length < BinaryReplayFormat.APPEND_LOG_HEADER_SIZE) {
             return new BinaryReplayAppendLogRecovery(
                     BinaryReplayAppendLogHeader.empty(),
@@ -79,11 +90,17 @@ public final class BinaryReplayAppendLogReader {
 
             int recordLength = recordLengthRead.value();
             int recordContentOffset = recordLengthRead.nextOffset();
-            int recordEnd = recordContentOffset + recordLength + BinaryReplayFormat.APPEND_LOG_CRC_BYTES;
-            if (recordLength < 0 || recordEnd > bytes.length) {
+            if (recordLength > BinaryReplayReadLimits.MAX_APPEND_LOG_RECORD_BYTES) {
+                return new BinaryReplayAppendLogRecovery(header, records, timeline, stringTable,
+                        BinaryReplayRecoveryStopReason.MALFORMED_RECORD, offset);
+            }
+            int remaining = bytes.length - recordContentOffset;
+            if (recordLength < 0 || remaining < BinaryReplayFormat.APPEND_LOG_CRC_BYTES
+                    || recordLength > remaining - BinaryReplayFormat.APPEND_LOG_CRC_BYTES) {
                 return new BinaryReplayAppendLogRecovery(header, records, timeline, stringTable,
                         BinaryReplayRecoveryStopReason.TRUNCATED_RECORD, offset);
             }
+            int recordEnd = recordContentOffset + recordLength + BinaryReplayFormat.APPEND_LOG_CRC_BYTES;
 
             byte[] recordContent = slice(bytes, recordContentOffset, recordLength);
             int storedChecksum = readLittleEndianInt(bytes, recordContentOffset + recordLength);
@@ -101,12 +118,14 @@ public final class BinaryReplayAppendLogReader {
                         return new BinaryReplayAppendLogRecovery(header, records, timeline, stringTable,
                                 BinaryReplayRecoveryStopReason.MALFORMED_RECORD, offset);
                     }
+                    BinaryReplayStorageCodec.validateStringTableCount(stringTable.size() + 1);
                     stringTable.add(definedString.value());
                 } else {
+                    BinaryReplayStorageCodec.validateTimelineEventCount(timeline.size() + 1);
                     timeline.add(BinaryReplayAppendLogCodec.decodeEvent(record.type(), record.payload(), stringTable));
                 }
                 records.add(record);
-            } catch (IllegalArgumentException ex) {
+            } catch (IllegalArgumentException | IOException ex) {
                 return new BinaryReplayAppendLogRecovery(header, records, timeline, stringTable,
                         BinaryReplayRecoveryStopReason.MALFORMED_RECORD, offset);
             }
@@ -163,6 +182,9 @@ public final class BinaryReplayAppendLogReader {
         int currentOffset = offset;
         while (currentOffset < bytes.length) {
             int current = bytes[currentOffset++] & 0xFF;
+            if (shift == 28 && (current & 0xF8) != 0) {
+                return null;
+            }
             value |= (current & 0x7F) << shift;
             if ((current & 0x80) == 0) {
                 return new VarIntRead(value, currentOffset);

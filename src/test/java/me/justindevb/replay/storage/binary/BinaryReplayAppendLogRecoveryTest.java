@@ -4,6 +4,8 @@ import me.justindevb.replay.recording.TimelineEvent;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import java.io.ByteArrayOutputStream;
+import java.nio.ByteBuffer;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
@@ -78,5 +80,67 @@ class BinaryReplayAppendLogRecoveryTest {
 
         assertEquals(BinaryReplayRecoveryStopReason.TRUNCATED_HEADER, recovery.stopReason());
         assertEquals(List.of(), recovery.timeline());
+    }
+
+    @Test
+    void treatsInvalidRecordLengthVarIntAsTruncatedLengthWithoutAllocating() throws Exception {
+        Path path = tempDir.resolve("invalid-record-length.appendlog");
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        out.writeBytes(BinaryReplayFormat.APPEND_LOG_MAGIC);
+        out.write(BinaryReplayFormat.APPEND_LOG_HEADER_VERSION);
+        out.write(BinaryReplayFormat.APPEND_LOG_HEADER_FLAGS_NONE);
+        out.write(0);
+        out.write(0);
+        out.writeBytes(ByteBuffer.allocate(Long.BYTES)
+                .order(BinaryReplayFormat.PRIMITIVE_BYTE_ORDER)
+                .putLong(RECORDING_STARTED_AT)
+                .array());
+        out.writeBytes(new byte[] {(byte) 0x80, (byte) 0x80, (byte) 0x80, (byte) 0x80, 0x10});
+        Files.write(path, out.toByteArray());
+
+        BinaryReplayAppendLogRecovery recovery = new BinaryReplayAppendLogReader().recover(path);
+
+        assertEquals(BinaryReplayRecoveryStopReason.TRUNCATED_RECORD_LENGTH, recovery.stopReason());
+        assertEquals(BinaryReplayFormat.APPEND_LOG_HEADER_SIZE, recovery.consumedBytes());
+    }
+
+    @Test
+    void treatsOversizedRecordAsMalformedBeforeAllocation() throws Exception {
+        Path path = tempDir.resolve("oversized-record.appendlog");
+        ByteArrayOutputStream out = appendLogHeader();
+        out.writeBytes(BinaryEncoding.encodeVarInt(BinaryReplayReadLimits.MAX_APPEND_LOG_RECORD_BYTES + 1));
+        Files.write(path, out.toByteArray());
+
+        BinaryReplayAppendLogRecovery recovery = new BinaryReplayAppendLogReader().recover(path);
+
+        assertEquals(BinaryReplayRecoveryStopReason.MALFORMED_RECORD, recovery.stopReason());
+        assertEquals(BinaryReplayFormat.APPEND_LOG_HEADER_SIZE, recovery.consumedBytes());
+    }
+
+    @Test
+    void acceptsSyntheticRecordLengthAboveChunkLimitWithoutAllocatingItsPayload() throws Exception {
+        Path path = tempDir.resolve("large-accepted-record.appendlog");
+        ByteArrayOutputStream out = appendLogHeader();
+        out.writeBytes(BinaryEncoding.encodeVarInt(BinaryReplayReadLimits.MAX_DECODED_CHUNK_BYTES + 1));
+        Files.write(path, out.toByteArray());
+
+        BinaryReplayAppendLogRecovery recovery = new BinaryReplayAppendLogReader().recover(path);
+
+        assertEquals(BinaryReplayRecoveryStopReason.TRUNCATED_RECORD, recovery.stopReason());
+        assertEquals(BinaryReplayFormat.APPEND_LOG_HEADER_SIZE, recovery.consumedBytes());
+    }
+
+    private static ByteArrayOutputStream appendLogHeader() {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        out.writeBytes(BinaryReplayFormat.APPEND_LOG_MAGIC);
+        out.write(BinaryReplayFormat.APPEND_LOG_HEADER_VERSION);
+        out.write(BinaryReplayFormat.APPEND_LOG_HEADER_FLAGS_NONE);
+        out.write(0);
+        out.write(0);
+        out.writeBytes(ByteBuffer.allocate(Long.BYTES)
+                .order(BinaryReplayFormat.PRIMITIVE_BYTE_ORDER)
+                .putLong(RECORDING_STARTED_AT)
+                .array());
+        return out;
     }
 }

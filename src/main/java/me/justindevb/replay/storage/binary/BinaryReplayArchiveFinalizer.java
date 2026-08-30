@@ -129,19 +129,22 @@ public final class BinaryReplayArchiveFinalizer implements ReplayFinalizer {
         List<BinaryTickIndexEntry> tickIndex = new ArrayList<>();
         long currentOffset = BinaryReplayFormat.PAYLOAD_HEADER_SIZE;
         long lastEventOffset = -1;
-        int nextCheckpointTick = 0;
+        long nextCheckpointTick = 0;
+        boolean indexStarted = false;
         int timelineIndex = 0;
 
         for (BinaryReplayAppendLogReader.DecodedRecord record : records) {
             if (record.type() != BinaryRecordType.DEFINE_STRING) {
                 TimelineEvent event = timeline.get(timelineIndex++);
-                if (lastEventOffset < 0) {
+                if (!indexStarted && event.tick() <= 0) {
                     tickIndex.add(new BinaryTickIndexEntry(0, currentOffset));
                     nextCheckpointTick = BinaryReplayFormat.TICK_INDEX_INTERVAL;
-                } else {
-                    while (nextCheckpointTick <= event.tick()) {
-                        tickIndex.add(new BinaryTickIndexEntry(nextCheckpointTick, lastEventOffset));
-                        nextCheckpointTick += BinaryReplayFormat.TICK_INDEX_INTERVAL;
+                    indexStarted = true;
+                } else if (indexStarted) {
+                    if (nextCheckpointTick <= event.tick()) {
+                        int checkpointTick = event.tick() - event.tick() % BinaryReplayFormat.TICK_INDEX_INTERVAL;
+                        tickIndex.add(new BinaryTickIndexEntry(checkpointTick, lastEventOffset));
+                        nextCheckpointTick = (long) checkpointTick + BinaryReplayFormat.TICK_INDEX_INTERVAL;
                     }
                 }
                 lastEventOffset = currentOffset;

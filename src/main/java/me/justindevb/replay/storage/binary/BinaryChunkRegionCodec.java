@@ -64,6 +64,9 @@ public final class BinaryChunkRegionCodec {
 
     public DecodedBinaryChunkRegion decode(byte[] regionBytes) throws IOException {
         Objects.requireNonNull(regionBytes, "regionBytes");
+        if (regionBytes.length > BinaryReplayReadLimits.MAX_CHUNK_REGION_BYTES) {
+            throw new IOException("Chunk region entry exceeds the permitted size");
+        }
         if (regionBytes.length < BinaryReplayFormat.CHUNK_REGION_HEADER_SIZE) {
             throw new IOException("Chunk region entry is too short");
         }
@@ -83,12 +86,22 @@ public final class BinaryChunkRegionCodec {
         ByteBuffer header = ByteBuffer.wrap(regionBytes).order(BinaryReplayFormat.PRIMITIVE_BYTE_ORDER);
         int indexEntryCount = header.getInt(8);
         int payloadSectionOffset = header.getInt(12);
-        if (indexEntryCount < 0) {
-            throw new IOException("Chunk region entry count must not be negative");
+        if (indexEntryCount < 0 || indexEntryCount > BinaryReplayReadLimits.MAX_REGION_CHUNKS) {
+            throw new IOException("Chunk region entry count is outside the permitted range: " + indexEntryCount);
         }
 
-        int expectedPayloadOffset = BinaryReplayFormat.CHUNK_REGION_HEADER_SIZE
-                + indexEntryCount * BinaryReplayFormat.CHUNK_REGION_INDEX_ENTRY_BYTES;
+        int remainingBytes = regionBytes.length - BinaryReplayFormat.CHUNK_REGION_HEADER_SIZE;
+        if (indexEntryCount > remainingBytes / BinaryReplayFormat.CHUNK_REGION_INDEX_ENTRY_BYTES) {
+            throw new IOException("Chunk region index count exceeds the remaining entry bytes");
+        }
+        int expectedPayloadOffset;
+        try {
+            expectedPayloadOffset = Math.addExact(
+                    BinaryReplayFormat.CHUNK_REGION_HEADER_SIZE,
+                    Math.multiplyExact(indexEntryCount, BinaryReplayFormat.CHUNK_REGION_INDEX_ENTRY_BYTES));
+        } catch (ArithmeticException ex) {
+            throw new IOException("Chunk region index size overflows", ex);
+        }
         if (payloadSectionOffset != expectedPayloadOffset) {
             throw new IOException("Chunk region payload section offset does not match header/index size");
         }
@@ -113,22 +126,35 @@ public final class BinaryChunkRegionCodec {
             int payloadOffset = row.getInt();
             int compressedLength = row.getInt();
             int uncompressedLength = row.getInt();
-            BinaryChunkRegionIndexEntry indexEntry = new BinaryChunkRegionIndexEntry(
-                    localChunkX,
-                    localChunkZ,
-                    payloadOffset,
-                    compressedLength,
-                    uncompressedLength,
-                    compression);
+            if (compressedLength <= 0 || compressedLength > BinaryReplayReadLimits.MAX_CHUNK_REGION_BYTES) {
+                throw new IOException("Chunk region compressed payload length is outside the permitted range");
+            }
+            if (uncompressedLength <= 0 || uncompressedLength > BinaryReplayReadLimits.MAX_DECODED_CHUNK_BYTES) {
+                throw new IOException("Chunk region decoded payload length is outside the permitted range");
+            }
+            BinaryChunkRegionIndexEntry indexEntry;
+            try {
+                indexEntry = new BinaryChunkRegionIndexEntry(
+                        localChunkX,
+                        localChunkZ,
+                        payloadOffset,
+                        compressedLength,
+                        uncompressedLength,
+                        compression);
+            } catch (IllegalArgumentException ex) {
+                throw new IOException("Invalid chunk region index entry", ex);
+            }
             int chunkKey = (localChunkX << 8) | localChunkZ;
             if (!seenChunks.add(chunkKey)) {
                 throw new IOException("Chunk region index contains duplicate chunk coordinates");
             }
-            int payloadStart = payloadSectionOffset + payloadOffset;
-            int payloadEnd = payloadStart + compressedLength;
-            if (payloadStart < payloadSectionOffset || payloadEnd < payloadStart || payloadEnd > regionBytes.length) {
+            long payloadStartLong = (long) payloadSectionOffset + payloadOffset;
+            long payloadEndLong = payloadStartLong + compressedLength;
+            if (payloadStartLong < payloadSectionOffset || payloadEndLong > regionBytes.length) {
                 throw new IOException("Chunk region payload bounds exceed entry length");
             }
+            int payloadStart = (int) payloadStartLong;
+            int payloadEnd = (int) payloadEndLong;
             ranges.add(new PayloadRange(payloadStart, payloadEnd));
             indexEntries.add(indexEntry);
             entries.add(new BinaryChunkRegionEntry(
@@ -143,10 +169,13 @@ public final class BinaryChunkRegionCodec {
         ranges.sort(Comparator.comparingInt(PayloadRange::start));
         int lastEnd = payloadSectionOffset;
         for (PayloadRange range : ranges) {
-            if (range.start < lastEnd) {
-                throw new IOException("Chunk region payload ranges overlap");
+            if (range.start != lastEnd) {
+                throw new IOException("Chunk region payload ranges contain an overlap or gap");
             }
             lastEnd = range.end;
+        }
+        if (lastEnd != regionBytes.length) {
+            throw new IOException("Chunk region entry contains trailing payload bytes");
         }
 
         return new DecodedBinaryChunkRegion(List.copyOf(indexEntries), List.copyOf(entries));

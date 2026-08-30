@@ -6,6 +6,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.file.Path;
+import java.io.IOException;
 import java.util.List;
 import java.util.zip.CRC32C;
 
@@ -17,6 +18,16 @@ class BinaryReplayAppendLogWriterTest {
 
     @TempDir
     Path tempDir;
+
+    @Test
+    void recordLengthPolicyAllowsRecordsAboveChunkLimitButRejectsAppendLogOverflow() {
+        assertDoesNotThrow(() -> BinaryReplayAppendLogWriter.validateRecordLength(
+                BinaryReplayReadLimits.MAX_DECODED_CHUNK_BYTES + 1L));
+        assertDoesNotThrow(() -> BinaryReplayAppendLogWriter.validateRecordLength(
+                BinaryReplayReadLimits.MAX_APPEND_LOG_RECORD_BYTES));
+        assertThrows(IOException.class, () -> BinaryReplayAppendLogWriter.validateRecordLength(
+                BinaryReplayReadLimits.MAX_APPEND_LOG_RECORD_BYTES + 1L));
+    }
 
     @Test
     void appendsMultipleEventTypesAndReadsThemBack() throws Exception {

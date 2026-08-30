@@ -508,6 +508,9 @@ final class BinaryReplayAppendLogCodec {
             int shift = 0;
             while (offset < bytes.length) {
                 int current = bytes[offset++] & 0xFF;
+                if (shift == 28 && (current & 0xF8) != 0) {
+                    throw new IllegalArgumentException("VarInt has an invalid terminal byte");
+                }
                 value |= (current & 0x7F) << shift;
                 if ((current & 0x80) == 0) {
                     return value;
@@ -569,6 +572,9 @@ final class BinaryReplayAppendLogCodec {
             int start = offset;
             int length = readVarInt();
             int prefixLength = offset - start;
+            if (length > BinaryReplayReadLimits.MAX_STRING_BYTES) {
+                throw new IllegalArgumentException("Append-log string exceeds the size limit");
+            }
             ensureRemaining(length);
             BinaryEncoding.DecodedString decoded = BinaryEncoding.decodeLengthPrefixedString(copyOfRange(start, prefixLength + length));
             offset += length;
@@ -589,6 +595,7 @@ final class BinaryReplayAppendLogCodec {
 
         List<String> readNullableStringList(List<String> stringTable) {
             int size = readVarInt();
+            ensureCountFitsRemaining(size, 1, "Nullable string list");
             List<String> values = new ArrayList<>(size);
             for (int index = 0; index < size; index++) {
                 values.add(readNullableStringRef(stringTable));
@@ -602,11 +609,15 @@ final class BinaryReplayAppendLogCodec {
                 return SerializedItemData.empty();
             }
             int length = readVarInt();
+            if (length > BinaryReplayReadLimits.MAX_ITEM_NBT_BYTES) {
+                throw new IllegalArgumentException("Serialized item exceeds the size limit");
+            }
             return SerializedItemData.fromBytes(readBytes(length));
         }
 
         List<SerializedItemData> readSerializedItemList() {
             int size = readVarInt();
+            ensureCountFitsRemaining(size, 1, "Serialized item list");
             List<SerializedItemData> values = new ArrayList<>(size);
             for (int index = 0; index < size; index++) {
                 values.add(readSerializedItem());
@@ -642,8 +653,14 @@ final class BinaryReplayAppendLogCodec {
         }
 
         private void ensureRemaining(int count) {
-            if (offset + count > bytes.length) {
+            if (count < 0 || count > bytes.length - offset) {
                 throw new IllegalArgumentException("Unexpected end of append-log payload");
+            }
+        }
+
+        private void ensureCountFitsRemaining(int count, int minimumBytesPerValue, String label) {
+            if (count < 0 || count > (bytes.length - offset) / minimumBytesPerValue) {
+                throw new IllegalArgumentException(label + " count exceeds remaining payload bytes");
             }
         }
     }

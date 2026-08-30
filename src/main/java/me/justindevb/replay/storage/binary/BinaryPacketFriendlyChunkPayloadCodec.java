@@ -20,6 +20,8 @@ public final class BinaryPacketFriendlyChunkPayloadCodec {
     private static final int FLAG_STORES_HEIGHTMAPS = 0x04;
     private static final int FLAG_STORES_LIGHT = 0x08;
     private static final int SUPPORTED_FLAGS = FLAG_HAS_BIOMES | FLAG_HAS_BLOCK_ENTITIES;
+    private static final int MIN_SECTION_BYTES = 8;
+    private static final int MIN_BLOCK_ENTITY_BYTES = 4;
 
     public byte[] encode(PacketFriendlyChunkPayload payload) {
         Objects.requireNonNull(payload, "payload");
@@ -56,6 +58,9 @@ public final class BinaryPacketFriendlyChunkPayloadCodec {
 
     public PacketFriendlyChunkPayload decode(byte[] bytes) throws IOException {
         Objects.requireNonNull(bytes, "bytes");
+        if (bytes.length > BinaryReplayReadLimits.MAX_DECODED_CHUNK_BYTES) {
+            throw new IOException("Chunk payload exceeds the decoded size limit");
+        }
         if (bytes.length < FIXED_HEADER_BYTES) {
             throw new IOException("Chunk payload is too short");
         }
@@ -86,26 +91,38 @@ public final class BinaryPacketFriendlyChunkPayloadCodec {
 
         Cursor cursor = new Cursor(bytes, FIXED_HEADER_BYTES);
         int blockEntityCount = cursor.readVarInt();
+        if (sectionCount > cursor.remaining() / MIN_SECTION_BYTES
+                || sectionCount > (BinaryReplayReadLimits.MAX_DECODED_CHUNK_BYTES - FIXED_HEADER_BYTES) / MIN_SECTION_BYTES) {
+            throw new IOException("Chunk payload sectionCount exceeds format bounds");
+        }
+        long chunkHeight = (long) sectionCount * 16;
+        long chunkCellCount = (long) sectionCount * BLOCKS_PER_SECTION;
         List<SectionPayload> sections = new ArrayList<>(sectionCount);
         for (int sectionIndex = 0; sectionIndex < sectionCount; sectionIndex++) {
-            sections.add(new SectionPayload(
-                    cursor.readPalette("block", BLOCKS_PER_SECTION),
-                    cursor.readUnsignedByte(),
-                    cursor.readPackedWords("block", BLOCKS_PER_SECTION),
-                    cursor.readPalette("biome", BIOMES_PER_SECTION),
-                    cursor.readUnsignedByte(),
-                    cursor.readPackedWords("biome", BIOMES_PER_SECTION)));
-            SectionPayload decodedSection = sections.get(sectionIndex);
-            validatePaletteSection(decodedSection.blockPalette(), decodedSection.blockBitsPerEntry(), decodedSection.blockWords(), BLOCKS_PER_SECTION, "block");
-            validatePaletteSection(decodedSection.biomePalette(), decodedSection.biomeBitsPerEntry(), decodedSection.biomeWords(), BIOMES_PER_SECTION, "biome");
+            List<String> blockPalette = cursor.readPalette("block", BLOCKS_PER_SECTION);
+            int blockBits = cursor.readUnsignedByte();
+            validateDecodedPalette(blockPalette, blockBits, BLOCKS_PER_SECTION, "block");
+            long[] blockWords = cursor.readPackedWords("block", expectedWordCount(BLOCKS_PER_SECTION, blockBits));
+            List<String> biomePalette = cursor.readPalette("biome", BIOMES_PER_SECTION);
+            int biomeBits = cursor.readUnsignedByte();
+            validateDecodedPalette(biomePalette, biomeBits, BIOMES_PER_SECTION, "biome");
+            long[] biomeWords = cursor.readPackedWords("biome", expectedWordCount(BIOMES_PER_SECTION, biomeBits));
+            sections.add(new SectionPayload(blockPalette, blockBits, blockWords, biomePalette, biomeBits, biomeWords));
         }
 
+        if (blockEntityCount > cursor.remaining() / MIN_BLOCK_ENTITY_BYTES
+                || blockEntityCount > chunkCellCount) {
+            throw new IOException("Chunk payload block entity count exceeds format bounds");
+        }
         List<BlockEntityPayload> blockEntities = new ArrayList<>(blockEntityCount);
         for (int index = 0; index < blockEntityCount; index++) {
             int packedXZ = cursor.readUnsignedByte();
             int localX = (packedXZ >>> 4) & 0x0F;
             int localZ = packedXZ & 0x0F;
             int yOffset = cursor.readVarInt();
+            if (yOffset >= chunkHeight) {
+                throw new IOException("Chunk payload block entity yOffset is outside the chunk height");
+            }
             String typeKey = cursor.readString();
             byte[] nbtBytes = cursor.readByteArray();
             blockEntities.add(new BlockEntityPayload(localX, yOffset, localZ, typeKey, nbtBytes));
@@ -198,6 +215,22 @@ public final class BinaryPacketFriendlyChunkPayloadCodec {
         Objects.requireNonNull(blockEntity.nbtBytes(), "nbtBytes");
     }
 
+    private static void validateDecodedPalette(List<String> palette, int bitsPerEntry, int cellCount, String label)
+            throws IOException {
+        if (bitsPerEntry > 31) {
+            throw new IOException(label + " bitsPerEntry must be between 0 and 31");
+        }
+        if ((palette.size() == 1) != (bitsPerEntry == 0)) {
+            throw new IOException(label + " bitsPerEntry does not match palette size");
+        }
+        if (palette.size() > 1 && palette.size() > (1L << bitsPerEntry)) {
+            throw new IOException(label + " palette does not fit inside bitsPerEntry");
+        }
+        if (palette.size() > cellCount) {
+            throw new IOException(label + " palette exceeds section cell count");
+        }
+    }
+
     private static int expectedWordCount(int cellCount, int bitsPerEntry) {
         if (bitsPerEntry == 0) {
             return 0;
@@ -252,6 +285,9 @@ public final class BinaryPacketFriendlyChunkPayloadCodec {
                     throw new IOException("Chunk payload VarInt was truncated");
                 }
                 int current = bytes[offset++] & 0xFF;
+                if (consumed == BinaryReplayFormat.VAR_INT_MAX_BYTES - 1 && (current & 0xF8) != 0) {
+                    throw new IOException("Chunk payload VarInt has an invalid terminal byte");
+                }
                 value |= (current & 0x7F) << shift;
                 if ((current & 0x80) == 0) {
                     return value;
@@ -263,7 +299,7 @@ public final class BinaryPacketFriendlyChunkPayloadCodec {
 
         private String readString() throws IOException {
             int length = readVarInt();
-            if (length > remaining()) {
+            if (length > BinaryReplayReadLimits.MAX_STRING_BYTES || length > remaining()) {
                 throw new IOException("Chunk payload string exceeds available bytes");
             }
             String value = new String(bytes, offset, length, BinaryReplayFormat.STRING_CHARSET);
@@ -273,7 +309,7 @@ public final class BinaryPacketFriendlyChunkPayloadCodec {
 
         private byte[] readByteArray() throws IOException {
             int length = readVarInt();
-            if (length > remaining()) {
+            if (length > BinaryReplayReadLimits.MAX_ITEM_NBT_BYTES || length > remaining()) {
                 throw new IOException("Chunk payload byte array exceeds available bytes");
             }
             byte[] value = Arrays.copyOfRange(bytes, offset, offset + length);
@@ -286,6 +322,9 @@ public final class BinaryPacketFriendlyChunkPayloadCodec {
             if (paletteSize <= 0) {
                 throw new IOException(label + " palette must not be empty");
             }
+            if (paletteSize > cellCount || paletteSize > remaining()) {
+                throw new IOException(label + " palette size exceeds format bounds");
+            }
             List<String> palette = new ArrayList<>(paletteSize);
             for (int index = 0; index < paletteSize; index++) {
                 palette.add(readString());
@@ -293,12 +332,12 @@ public final class BinaryPacketFriendlyChunkPayloadCodec {
             return List.copyOf(palette);
         }
 
-        private long[] readPackedWords(String label, int cellCount) throws IOException {
+        private long[] readPackedWords(String label, int expectedCount) throws IOException {
             int wordCount = readVarInt();
-            if (wordCount < 0) {
-                throw new IOException(label + " packed word count must be non-negative");
+            if (wordCount != expectedCount) {
+                throw new IOException(label + " packed word count mismatch");
             }
-            if (remaining() < wordCount * Long.BYTES) {
+            if (wordCount > remaining() / Long.BYTES) {
                 throw new IOException(label + " packed word payload was truncated");
             }
             long[] words = new long[wordCount];

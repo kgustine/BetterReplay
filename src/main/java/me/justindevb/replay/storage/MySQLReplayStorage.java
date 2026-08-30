@@ -5,6 +5,7 @@ import me.justindevb.replay.api.ReplayExportQuery;
 import me.justindevb.replay.debug.ReplayDumpQuery;
 import me.justindevb.replay.recording.TimelineEvent;
 import me.justindevb.replay.storage.binary.BinaryReplayStorageCodec;
+import me.justindevb.replay.storage.binary.BinaryReplayReadLimits;
 import me.justindevb.replay.util.ReplayNames;
 import me.justindevb.replay.util.io.ReplayCompressor;
 
@@ -18,6 +19,12 @@ import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 
 public class MySQLReplayStorage implements ReplayStorage {
+
+    private static final String REPLAY_DATA_QUERY = """
+            SELECT OCTET_LENGTH(data) AS data_size,
+                   CASE WHEN OCTET_LENGTH(data) <= ? THEN data ELSE NULL END AS data
+            FROM replays WHERE name=?
+            """;
 
     private final DataSource dataSource;
     private final Replay replay;
@@ -51,6 +58,57 @@ public class MySQLReplayStorage implements ReplayStorage {
     private byte[] encodeForStorage(String name, ReplaySaveRequest request) throws IOException {
         byte[] payload = saveCodec.finalizeReplay(name, request, replay.getPluginMeta().getVersion());
         return usesCodecCompression() ? ReplayCompressor.compress(new String(payload, java.nio.charset.StandardCharsets.UTF_8)) : payload;
+    }
+
+    private byte[] readReplayData(ResultSet resultSet) throws SQLException, IOException {
+        long dataSize = resultSet.getLong("data_size");
+        if (dataSize > BinaryReplayReadLimits.MAX_STORED_ARCHIVE_BYTES) {
+            throw new IOException("Replay data exceeds the limit of "
+                    + BinaryReplayReadLimits.MAX_STORED_ARCHIVE_BYTES + " bytes");
+        }
+
+        Blob blob = null;
+        try {
+            try {
+                blob = resultSet.getBlob("data");
+            } catch (SQLFeatureNotSupportedException | UnsupportedOperationException ignored) {
+                // Some JDBC drivers only expose binary columns as streams.
+            }
+
+            if (blob != null) {
+                long length = blob.length();
+                if (length > BinaryReplayReadLimits.MAX_STORED_ARCHIVE_BYTES) {
+                    throw new IOException("Replay data exceeds the limit of "
+                            + BinaryReplayReadLimits.MAX_STORED_ARCHIVE_BYTES + " bytes");
+                }
+                try (InputStream input = blob.getBinaryStream()) {
+                    return readReplayStream(input);
+                }
+            }
+
+            try (InputStream input = resultSet.getBinaryStream("data")) {
+                return readReplayStream(input);
+            }
+        } finally {
+            if (blob != null) {
+                blob.free();
+            }
+        }
+    }
+
+    private byte[] readReplayStream(InputStream input) throws IOException {
+        if (input == null) {
+            throw new IOException("Replay data is NULL");
+        }
+        return BinaryReplayReadLimits.readAllBytes(
+                input, BinaryReplayReadLimits.MAX_STORED_ARCHIVE_BYTES, "Replay data");
+    }
+
+    private PreparedStatement prepareReplayDataQuery(Connection connection, String name) throws SQLException {
+        PreparedStatement statement = connection.prepareStatement(REPLAY_DATA_QUERY);
+        statement.setLong(1, BinaryReplayReadLimits.MAX_STORED_ARCHIVE_BYTES);
+        statement.setString(2, name);
+        return statement;
     }
 
     private void init() {
@@ -150,15 +208,11 @@ public class MySQLReplayStorage implements ReplayStorage {
         }
         return CompletableFuture.supplyAsync(() -> {
             try (Connection conn = dataSource.getConnection();
-                 PreparedStatement ps = conn.prepareStatement(
-                         "SELECT data FROM replays WHERE name=?"
-                 )) {
-
-                ps.setString(1, name);
+                  PreparedStatement ps = prepareReplayDataQuery(conn, name)) {
 
                 try (ResultSet rs = ps.executeQuery()) {
                     if (!rs.next()) return null;
-                    byte[] data = rs.getBytes("data");
+                    byte[] data = readReplayData(rs);
                     ReplayStorageCodec codec = formatDetector.detectCodec(name, data);
                     return codec.decodeReplayData(data, replay.getPluginMeta().getVersion());
                 }
@@ -342,14 +396,13 @@ public class MySQLReplayStorage implements ReplayStorage {
         }
         return CompletableFuture.supplyAsync(() -> {
             try (Connection conn = dataSource.getConnection();
-                PreparedStatement ps = conn.prepareStatement("SELECT data FROM replays WHERE name=?")) {
+                 PreparedStatement ps = prepareReplayDataQuery(conn, name)) {
 
-                ps.setString(1, name);
                 try (ResultSet rs = ps.executeQuery()) {
                     if (!rs.next())
                         return null;
 
-                    byte[] data = rs.getBytes("data");
+                    byte[] data = readReplayData(rs);
                     ReplayStorageCodec codec = formatDetector.detectCodec(name, data);
                     return codec.writeReplayFile(name, data, replay.getPluginMeta().getVersion());
                 }
@@ -367,15 +420,14 @@ public class MySQLReplayStorage implements ReplayStorage {
         }
         return CompletableFuture.supplyAsync(() -> {
             try (Connection conn = dataSource.getConnection();
-                 PreparedStatement ps = conn.prepareStatement("SELECT data FROM replays WHERE name=?")) {
+                  PreparedStatement ps = prepareReplayDataQuery(conn, name)) {
 
-                ps.setString(1, name);
                 try (ResultSet rs = ps.executeQuery()) {
                     if (!rs.next()) {
                         return null;
                     }
 
-                    byte[] data = rs.getBytes("data");
+                    byte[] data = readReplayData(rs);
                     ReplayStorageCodec codec = formatDetector.detectCodec(name, data);
                     return replayExporter.exportReplay(name, codec.decodeReplayData(data, replay.getPluginMeta().getVersion()), query,
                             replay.getPluginMeta().getVersion());
@@ -394,15 +446,14 @@ public class MySQLReplayStorage implements ReplayStorage {
         }
         return CompletableFuture.supplyAsync(() -> {
             try (Connection conn = dataSource.getConnection();
-                 PreparedStatement ps = conn.prepareStatement("SELECT data FROM replays WHERE name=?")) {
+                  PreparedStatement ps = prepareReplayDataQuery(conn, name)) {
 
-                ps.setString(1, name);
                 try (ResultSet rs = ps.executeQuery()) {
                     if (!rs.next()) {
                         return null;
                     }
 
-                    byte[] data = rs.getBytes("data");
+                    byte[] data = readReplayData(rs);
                     ReplayStorageCodec codec = formatDetector.detectCodec(name, data);
                     return codec.inspectReplay(name, data, replay.getPluginMeta().getVersion());
                 }
@@ -419,15 +470,14 @@ public class MySQLReplayStorage implements ReplayStorage {
         }
         return CompletableFuture.supplyAsync(() -> {
             try (Connection conn = dataSource.getConnection();
-                 PreparedStatement ps = conn.prepareStatement("SELECT data FROM replays WHERE name=?")) {
+                  PreparedStatement ps = prepareReplayDataQuery(conn, name)) {
 
-                ps.setString(1, name);
                 try (ResultSet rs = ps.executeQuery()) {
                     if (!rs.next()) {
                         return null;
                     }
 
-                    byte[] data = rs.getBytes("data");
+                    byte[] data = readReplayData(rs);
                     ReplayStorageCodec codec = formatDetector.detectCodec(name, data);
                     return replayDumpWriter.writeDump(name, codec.decodeTimeline(data, replay.getPluginMeta().getVersion()), query);
                 }

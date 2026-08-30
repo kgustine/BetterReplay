@@ -91,6 +91,28 @@ class BinaryChunkRegionCodecTest {
         assertEquals("Unsupported chunk payload codec id: 99", ex.getMessage());
     }
 
+    @Test
+    void rejectsMoreThanMaximumChunksBeforeReadingIndexRows() {
+        byte[] regionBytes = codec.encode(List.of());
+        ByteBuffer.wrap(regionBytes, 8, Integer.BYTES)
+                .order(BinaryReplayFormat.PRIMITIVE_BYTE_ORDER)
+                .putInt(BinaryReplayReadLimits.MAX_REGION_CHUNKS + 1);
+
+        assertThrows(IOException.class, () -> codec.decode(regionBytes));
+    }
+
+    @Test
+    void rejectsChunkDecodedLengthAboveLimit() {
+        byte[] regionBytes = codec.encode(List.of(
+                new BinaryChunkRegionEntry(1, 1, 8, BinaryChunkCompression.LZ4_FRAME, new byte[] {0x01})
+        ));
+        ByteBuffer.wrap(regionBytes, 28, Integer.BYTES)
+                .order(BinaryReplayFormat.PRIMITIVE_BYTE_ORDER)
+                .putInt(BinaryReplayReadLimits.MAX_DECODED_CHUNK_BYTES + 1);
+
+        assertThrows(IOException.class, () -> codec.decode(regionBytes));
+    }
+
     private static int littleEndianInt(byte[] bytes, int offset) {
         return ByteBuffer.wrap(bytes, offset, Integer.BYTES)
                 .order(BinaryReplayFormat.PRIMITIVE_BYTE_ORDER)

@@ -16,6 +16,7 @@ public final class BinaryChunkPayloadCodec {
     private static final byte[] MAGIC = new byte[] { 'B', 'R', 'C', 'S' };
     private static final int VERSION = 1;
     private static final int FIXED_HEADER_BYTES = 16;
+    private static final int MAX_PALETTE_SIZE = 1 << Short.SIZE;
 
     public byte[] encode(int minY, int height, List<String> palette, short[] stateIndexes) {
         Objects.requireNonNull(palette, "palette");
@@ -23,8 +24,8 @@ public final class BinaryChunkPayloadCodec {
         if (height <= 0) {
             throw new IllegalArgumentException("height must be positive");
         }
-        int expectedBlockCount = 16 * 16 * height;
-        if (stateIndexes.length != expectedBlockCount) {
+        long expectedBlockCount = 16L * 16L * height;
+        if (expectedBlockCount > Integer.MAX_VALUE || stateIndexes.length != expectedBlockCount) {
             throw new IllegalArgumentException("stateIndexes length must equal 16*16*height");
         }
 
@@ -69,14 +70,27 @@ public final class BinaryChunkPayloadCodec {
         }
 
         Cursor cursor = new Cursor(bytes, FIXED_HEADER_BYTES);
+        long expectedBlockCountLong = 16L * 16L * height;
+        long expectedStateBytes = expectedBlockCountLong * Short.BYTES;
+        if (expectedBlockCountLong > Integer.MAX_VALUE || expectedStateBytes > cursor.remaining()) {
+            throw new IOException("Chunk payload block state length exceeds available bytes");
+        }
+
         int paletteSize = cursor.readVarInt();
+        if (paletteSize <= 0) {
+            throw new IOException("Chunk payload palette must not be empty");
+        }
+        long paletteBytesAvailable = cursor.remaining() - expectedStateBytes;
+        if (paletteSize > MAX_PALETTE_SIZE || paletteSize > paletteBytesAvailable) {
+            throw new IOException("Chunk payload palette size exceeds format bounds");
+        }
         List<String> palette = new ArrayList<>(paletteSize);
         for (int index = 0; index < paletteSize; index++) {
             palette.add(cursor.readString());
         }
 
-        int expectedBlockCount = 16 * 16 * height;
-        if (cursor.remaining() != expectedBlockCount * Short.BYTES) {
+        int expectedBlockCount = (int) expectedBlockCountLong;
+        if (cursor.remaining() != expectedStateBytes) {
             throw new IOException("Chunk payload block state length mismatch");
         }
         short[] stateIndexes = new short[expectedBlockCount];
@@ -120,6 +134,9 @@ public final class BinaryChunkPayloadCodec {
             int consumed = 0;
             while (offset < bytes.length) {
                 int current = bytes[offset++] & 0xFF;
+                if (consumed == BinaryReplayFormat.VAR_INT_MAX_BYTES - 1 && (current & 0xF8) != 0) {
+                    throw new IOException("Chunk payload VarInt has an invalid terminal byte");
+                }
                 value |= (current & 0x7F) << shift;
                 consumed++;
                 if ((current & 0x80) == 0) {
@@ -135,7 +152,7 @@ public final class BinaryChunkPayloadCodec {
 
         private String readString() throws IOException {
             int length = readVarInt();
-            if (length < 0 || length > remaining()) {
+            if (length > BinaryReplayReadLimits.MAX_STRING_BYTES || length > remaining()) {
                 throw new IOException("Chunk payload string exceeds available bytes");
             }
             String value = new String(bytes, offset, length, java.nio.charset.StandardCharsets.UTF_8);

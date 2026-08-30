@@ -119,6 +119,7 @@ BetterReplay keeps storage backend selection behind the [ReplayStorage.java](../
 - New saves are written as binary `.br` archives with a manifest, payload entries, and optional chunk regions.
 - Current binary archives use replay format `v2`.
 - The `.br` ZIP container still uses stored entries; compression is applied inside `replay.bin` and each independently compressed chunk payload.
+- File and MySQL replay reads enforce the same stored-size ceiling before codec detection. Binary loading then validates the STORED-only ZIP structure and applies separate limits to manifest, timeline, region, and decompressed chunk data before allocating parser collections.
 - Replay-name and replay-summary listings flow through a shared 5-second cache in `ReplayCache`; stale manager reads refresh the active storage backend and update the cache for commands, tab completion, and API callers.
 
 Compatibility notes:
